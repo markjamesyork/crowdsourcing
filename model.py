@@ -1,21 +1,29 @@
 # agents.py
 
-from enum import Enum
+from enum import Enum, auto
 import numpy as np
 import numpy.typing as npt
 import numpy.testing as testing
 import pulp
 
 
-BeliefNoise = Enum('BeliefNoise',
-                   'ZERO ' +
-                   'GAUSSIAN')
-ReportStrategy = Enum('ReportStrategy',
-                      'TRUE ' +
-                      'GAUSSIAN')
+class BeliefNoise(Enum):
+    ZERO = auto()
+    GAUSSIAN = auto()
+
+
+class ReportStrategy(Enum):
+    TRUE = auto()
+    GAUSSIAN = auto()
+
+
+class ElicitationStrategy(Enum):
+    WINKLER = auto()
+    VCG = auto()
 
 
 class Model:
+    '''Simulates borrowers-recommenders-lender system'''
 
     @property
     def EPSILON(self) -> float:
@@ -56,6 +64,11 @@ class Model:
         self.liquidity = np.int32(nullish(liquidity, m))
         self.allocation = np.zeros(m, np.int32)
 
+        # flags to ensure proper usage
+        self.REPORT_STRATEGY = None
+        self.ELICITATION_STRATEGY = None
+
+        # normalization checks
         assert np.logical_and(self.true_probabilities >= 0,
                               self.true_probabilities <= 1).all(), 'init(): True probabilities must be in [0, 1]'
         assert np.logical_and(self.true_beliefs >= 0,
@@ -67,22 +80,23 @@ class Model:
             np.sum(self.weights), 1), 'init(): Recommender weights must be normalized'
         assert 1 <= self.liquidity <= self.m, 'init(): Liquidity must be in {1, ..., m}'
 
+        # dimensionality checks
         assert self.true_probabilities.shape == (
-            self.m, ), 'init(): Dimension of true probabilities incorrect'
+            self.m, ), 'init(): Dimension of true probabilities must be (n)'
         assert self.true_beliefs.shape == (
-            self.n, self.m), 'init(): Dimension of true beliefs incorrect'
+            self.n, self.m), 'init(): Dimension of true beliefs must be (n x m)'
         assert self.reports.shape == (
-            self.n, self.m), 'init(): Dimension of recommender reports incorrect'
+            self.n, self.m), 'init(): Dimension of recommender reports must be (n x m)'
         assert self.weights.shape == (
-            self.n, ), 'init(): Dimensions of recommender weights incorrect'
+            self.n, ), 'init(): Dimensions of recommender weights must be (n)'
         assert self.allocation.shape == (
-            self.m, ), 'init(): Dimensions of allocation incorrect'
+            self.m, ), 'init(): Dimensions of allocation must be (m)'
         assert self.outcomes.shape == (
-            self.m, ), 'init(): Dimensions of outcomes incorrect'
+            self.m, ), 'init(): Dimensions of outcomes must be (m)'
         assert self.immediate_payments.shape == (
-            self.n, ), 'init(): Dimension of immediate payments incorrect'
+            self.n, ), 'init(): Dimension of immediate payments must be (n)'
         assert self.outcome_payments.shape == (
-            self.n, self.m), 'init(): Dimension of outcome payments incorrect'
+            self.n, self.m), 'init(): Dimension of outcome payments must be (n x m)'
 
     def add_beliefs_noise(self, type: BeliefNoise, param: float = 0.05) -> None:
         if type == BeliefNoise.ZERO:
@@ -94,6 +108,7 @@ class Model:
         self.true_beliefs = truncate(self.true_beliefs)
 
     def make_reports(self, type: ReportStrategy, param: float = 0.05) -> None:
+        self.REPORT_STRATEGY = type
         if type == ReportStrategy.TRUE:
             self.reports = self.true_beliefs
         elif type == ReportStrategy.GAUSSIAN:
@@ -103,7 +118,19 @@ class Model:
             assert False, 'make_reports(): Report type invalid'
         self.reports = truncate(self.reports, min=self.EPSILON)
 
+    def elicit(self, type: ElicitationStrategy) -> None:
+        assert self.REPORT_STRATEGY, 'must call make_reports() before calling elicit()'
+        assert not self.ELICITATION_STRATEGY, 'cannot elicit() twice'
+        self.ELICITATION_STRATEGY = type
+        if type == ElicitationStrategy.WINKLER:
+            self._elicit_winkler()
+        elif type == ElicitationStrategy.VCG:
+            self._elicit_vcg()
+        else:
+            assert False, 'elicit(): Elicitation strategy invalid'
+
     def _get_score_winkler(self, i: int, q: int) -> np.float64:
+        '''util for _elicit_winkler()'''
         report = self.reports[i, q]
         outcome = self.outcomes[q]
         min_report = truncate(1/self.weights[i] * (self.threshold - (self._get_linear_aggregator(q) - self.weights[i] * report)),
@@ -119,9 +146,10 @@ class Model:
             return (np.log(1 - report) - np.log(1 - min_report)) / (-1 * np.log(min_report))
 
     def _get_linear_aggregator(self, q: int) -> np.float64:
+        '''util for _get_linear_aggregator()'''
         return np.dot(self.weights, self.reports[:, q])
 
-    def elicit_winkler(self) -> None:
+    def _elicit_winkler(self) -> None:
         for q in range(self.m):
             belief = self._get_linear_aggregator(q)
             if belief > self.threshold:
@@ -132,6 +160,7 @@ class Model:
                     self.outcome_payments[i, q] = self._get_score_winkler(i, q)
 
     def _get_vcg_allocation(self, ignore_i: int = -1) -> npt.NDArray:
+        '''util for _elicit_vcg()'''
         assert isinstance(
             ignore_i, int), '_get_vcg_allocation(): ignoreRecommender must be int'
 
@@ -168,7 +197,7 @@ class Model:
     def _get_scores_vcg(self, allocation) -> npt.NDArray:
         return self.reports.dot(allocation) * self.weights
 
-    def elicit_vcg(self) -> None:
+    def _elicit_vcg(self) -> None:
         self.allocation = self._get_vcg_allocation()
         scores = self._get_scores_vcg(self.allocation)
 
@@ -191,7 +220,9 @@ class Model:
 
     def __str__(self):
         return '\n================================================\n\n' + \
-            f'(m, n): {self.m, self.n}\n\n' + \
+            str(nullish(self.ELICITATION_STRATEGY, 'WARNING: DID NOT ELICIT')) + '\n' + \
+            str(nullish(self.REPORT_STRATEGY, 'WARNING: NO REPORT STRATEGY')) + '\n\n' + \
+            f'(n, m): {self.n, self.m}\n\n' + \
             f'borrower true probabilities:\n{self.true_probabilities}\n\n' + \
             f'recommender true beliefs:\n{self.true_beliefs}\n\n' + \
             f'recommender reports:\n{self.reports}\n\n' + \
@@ -204,14 +235,13 @@ class Model:
             f'outcome payments:\n{self.outcome_payments}'
 
 
-def main():
+def demo():
     # Default is uniformly random repayment probabilities, true beliefs that match
     # real probabilities, threshold of 0.5, equal recommender weights, unconstrained liquidity
     model = Model(n=5, m=3)
     model.add_beliefs_noise(BeliefNoise.GAUSSIAN)
     model.make_reports(ReportStrategy.TRUE)
-
-    model.elicit_winkler()
+    model.elicit(ElicitationStrategy.WINKLER)
     print(model)
 
     # You can also constrain liquidity, use VCG, and add a bunch of custom values
@@ -226,18 +256,23 @@ def main():
                   liquidity=1)
     model.add_beliefs_noise(BeliefNoise.GAUSSIAN)
     model.make_reports(ReportStrategy.TRUE)
-
-    model.elicit_vcg()
+    model.elicit(ElicitationStrategy.VCG)
     print(model)
+
+
+def main():
+    demo()
 
 
 # UTILS
 
-def truncate(x, min: float = 0, max: float = 1):
+def truncate(x: np.ndarray, min: float = 0, max: float = 1) -> np.ndarray:
+    '''performs double (min-max) truncation on all values in array x'''
     return np.minimum(max, np.maximum(min, x))
 
 
 def nullish(x, y):
+    '''nullish coalescing operator: return x if x is not null else y'''
     return x if x is not None else y
 
 
