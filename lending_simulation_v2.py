@@ -28,7 +28,7 @@ def main(n_recommenders, n_borrowers, budget, c):
     p = alpha*np.tile(repayment_probs, (n_recommenders, 1)) + \
             (1-alpha)*np.random.random((n_recommenders, n_borrowers)) #recommender beliefs - |N| x |M|
     '''
-    mechanism = 'truncated_winkler' #'truncated_winkler', '0_1_vcg'
+    mechanism = 'vcg_scoring' #'truncated_winkler', 'vcg_scoring'
     shift = beta.rvs(.5, 5, size=n_recommenders) #The upward bias of each recommender
     rec_accuracy_a_b_vector = [10]*n_recommenders #value to use as a and b in the beta distribution for each recommender's accuracy. True belief will be trim(true_prob + skew + beta(a,b) - .5, 0, 1)
     rec_accuracy_a_b_matrix = np.tile(rec_accuracy_a_b_vector,(n_borrowers,1)).T
@@ -36,12 +36,17 @@ def main(n_recommenders, n_borrowers, budget, c):
     use_weights = True
 
     #0.1 Honesty Parameters
-    honesty_type = 'honest', #{'honest', 'random_misreports', 'misreports_select_recommenders', 'collusion'}
-    rand_misreport_rate = .1 #fraction of reports which are misreports under 'random_misreports' honesty type
+    honesty_type = 'collusion' #{'honest', 'random_misreports', 'misreports_select_recommenders', 'collusion'}
+    rand_misreport_rate = .5 #fraction of reports which are misreports under 'random_misreports' honesty type
     frac_misreports_1 = .5 #fraction of misreports which are 1 in all honesty types. All misreports other than 1 are 0.
-    frac_dishonest_recommenders = .2 #fraction of recommenders who are dishonest in 'misreports_select_recommenders' and 'collusion' honesty types
-    frac_misreports_by_dishonest_recs = .5 #In honesty type 'misreports_select_recommenders', the fraction of reports by dishonest recommenders which are misreports. In honesty type 'collusion', this is the fraction of all potential borrowers on whom dishonest recommenders misreport
+    frac_dishonest_recommenders = .5 #fraction of recommenders who are dishonest in 'misreports_select_recommenders' and 'collusion' honesty types
+    frac_misreports_by_dishonest_recs = .5 #In honesty type 'misreports_select_recommenders', the fraction of reports by dishonest recommenders which are misreports. In honesty type 'collusion', this is the fraction of all potential borrowers on whom dishonest recommenders misreport. Note this number is rounded down to the nearest integer number of borrowers.
 
+    if honesty_type in ['misreports_select_recommenders', 'collusion']: #Set which recommenders will be colluding in all rounds
+        rand_rec_ranks = rankdata(np.random.random(n_recommenders))
+        misreporting_recommenders = np.where(rand_rec_ranks <= n_recommenders*\
+                    frac_dishonest_recommenders, 1, np.zeros((1,n_recommenders)))[0] #vector with 1s for misreporting recommenders and 0 for honest recommenders
+        print('misreporting_recommenders: ', misreporting_recommenders)
     #0.2 Setting Recommender Honesty
     recommender_honesty = np.zeros(n_recommenders)
     recommender_honesty = np.where(rankdata(np.random.random(n_recommenders)) \
@@ -61,9 +66,9 @@ def main(n_recommenders, n_borrowers, budget, c):
         elif use_weights == True: weights = \
                         generate_weights(reports, multi_round_lending_decisions,\
                         multi_round_outcomes, n_recommenders, n_borrowers)
-        print('Round: ', i, 'weights: ',weights)
+        print('Round: ', i, 'weights: ',np.round(weights,2))
         #1 Borrow Prob and Recommender Belief Creation
-        repayment_probs = beta.rvs(4,1, size=n_borrowers) #True repayment probability for each borrower
+        repayment_probs = beta.rvs(3,2, size=n_borrowers) #True repayment probability for each borrower
         '''
         print('repayment_probs',repayment_probs)
         print('n_recommenders',n_recommenders)
@@ -83,41 +88,49 @@ def main(n_recommenders, n_borrowers, budget, c):
 
         #2 Reporting / Misreporting Mechanism
         p_hat = p.copy() #truthful reporting
+
         if honesty_type == 'random_misreports':
+            #A random subset of all reports are set to 0 or 1
             n_reports = n_recommenders * n_borrowers
-            rand_ranks = rankdata(np.random.random(p.shape))
-            np.where(rand_ranks <= n_reports * rand_misreport_rate * \
-                     (1 - frac_misreports_1), p_hat = 0)
-            np.where(rand_ranks > n_reports * rand_misreport_rate * \
-                     (1 - frac_misreports_1) and rand_ranks <= \
-                     n_reports * rand_misreport_rate, p_hat = 1)
-        '''
+            rand_ranks = rankdata(np.random.random(p.shape)).reshape(p.shape)
+            p_hat = np.where(rand_ranks <= n_reports * rand_misreport_rate * \
+                     frac_misreports_1, 1, p_hat)
+            p_hat = np.where((rand_ranks > n_reports * rand_misreport_rate * \
+                     frac_misreports_1) & (rand_ranks <= \
+                     n_reports * rand_misreport_rate), 0, p_hat)
+
         elif honesty_type == 'misreports_select_recommenders':
-            for i in range(n_recommenders):
-                if i == 1.: continue
-                rand_ranks = rankdata(np.random.random(n_borrowers))
-                np.where(rand_ranks <= n_borrowers*frac_misreports_by_dishonest_recs \
-                     * (1 - frac_misreports_1), p_hat[i] = 0)
-                np.where(rand_ranks > n_borrowers*frac_misreports_by_dishonest_recs \
-                     * (1 - frac_misreports_1) and rand_ranks <= \
-                     n_borrowers*frac_misreports_by_dishonest_recs, p_hat[i] = 1)
+            #A subset of recommenders each chooses a random set of borrowers on whom to missreport. The other recommenders are honest.
+            for j in range(n_recommenders):
+                if misreporting_recommenders[j] == 0.: continue #skip misreport setting for honest recommenders
+                rand_bor_ranks = rankdata(np.random.random(n_borrowers))
+                p_hat[j] = np.where(rand_bor_ranks <= n_borrowers*\
+                            frac_misreports_by_dishonest_recs \
+                            * frac_misreports_1, 1, p_hat[j])
+                p_hat[j] = np.where((rand_bor_ranks > n_borrowers*\
+                            frac_misreports_by_dishonest_recs \
+                            * frac_misreports_1) & (rand_bor_ranks <= \
+                            n_borrowers*frac_misreports_by_dishonest_recs), 0, p_hat[j])
+
         elif honesty_type == 'collusion':
-             for i in range(n_recommenders):
-                rand_ranks = rankdata(np.random.random(n_borrowers))
-                if i == 1.: continue
-                np.where(rand_ranks <= n_borrowers*frac_misreports_by_dishonest_recs \
-                     * (1 - frac_misreports_1), p_hat[i] = 0)
-                np.where(rand_ranks > n_borrowers*frac_misreports_by_dishonest_recs \
-                     * (1 - frac_misreports_1) and rand_ranks <= \
-                     n_borrowers*frac_misreports_by_dishonest_recs, p_hat[i] = 1)
-       '''
+            #A subset of recommenders together chooses a random set of borrowers on whom they will coordinate misreports. The other recommenders are honest.
+            #Note that "collusion" has no effect on whether borrowers repay.
+            rand_bor_ranks = rankdata(np.random.random(n_borrowers))
+            for j in range(n_borrowers):
+                if rand_bor_ranks[j] > n_borrowers*frac_misreports_by_dishonest_recs:\
+                            continue
+                if rand_bor_ranks[j] <= n_borrowers*frac_misreports_by_dishonest_recs*\
+                            frac_misreports_1:
+                    p_hat[:,j] = np.where(misreporting_recommenders == 1, 1, p_hat[:,j])
+                else:
+                    p_hat[:,j] = np.where(misreporting_recommenders == 1, 0, p_hat[:,j])
 
         #3 Repayment and Recommender Compensation Calculation
         if mechanism == 'truncated_winkler':
                     expected_payout, actual_payout, lending_decisions, \
                     repayment_outcomes = truncated_winkler(p, p_hat, \
                     repayment_probs, c, weights)
-        elif mechanism == '0_1_vcg':
+        elif mechanism == 'vcg_scoring':
                     expected_payout, actual_payout, lending_decisions, \
                     repayment_outcomes = vcg(p, p_hat, \
                     repayment_probs, budget, c, weights)
@@ -238,15 +251,16 @@ def vcg(p, p_hat, repayment_probs, budget, c, weights):
     #augment p_hat with reserve borrowers and reserve recommender
     p_hat = np.vstack((p_hat, np.zeros((1,n_borrowers))))
     tmp_array = np.vstack((np.zeros((n_recommenders,budget)), np.full((1,budget),\
-                    c*n_recommenders)))
+                    c)))
     p_hat = np.hstack((p_hat, tmp_array))
+    weights_aug = np.hstack((weights,np.asarray([1])))
 
     #1 Lending decisions
     #sums = np.sum(p_hat, axis = 0) #w/o weights
-    sums = np.matmul(p_hat, weights.T)
+    sums = np.matmul(weights_aug, p_hat)
     sums.sort()
     threshold = sums[-budget]
-    sums = np.matmul(p_hat, weights.T)
+    sums = np.matmul(weights_aug, p_hat)
     lending_decisions = np.where(sums[:n_borrowers] >= threshold, 1, 0) #Will not allocate any reserve borrowers yet
     lending_decisions = np.hstack((lending_decisions, np.zeros((budget,))))
 
@@ -257,45 +271,34 @@ def vcg(p, p_hat, repayment_probs, budget, c, weights):
     #2 Expected Score
     payments = np.zeros(n_recommenders)
     expected_payout = np.zeros(n_recommenders)
-    ''' #without weights
-    for i in range(n_recommenders): #loop over borrowers to calculate payment t and expected score
-        p_hat_less_i = np.delete(p_hat, i, 0)
-        sums_i = np.sum(p_hat_less_i, axis = 0)
-        sums_i.sort()
-        threshold = sums_i[-budget]
-        sums_i = np.sum(p_hat_less_i, axis = 0)
-        lending_decisions_i = np.where(sums_i[:n_borrowers] > threshold, 1, 0) #Will not allocate any reserve borrowers yet
-        lending_decisions_i = np.hstack((lending_decisions_i, np.zeros((budget,))))
-        if np.sum(lending_decisions_i) < budget: #allocates just enough reserve borrowers to fill the budget quota
-            lending_decisions_i[n_borrowers: int(n_borrowers + budget - \
-                             np.sum(lending_decisions_i))] = 1
-        payments[i] = np.sum(np.multiply(sums_i, lending_decisions_i)) - \
-                    np.sum(np.multiply(sums_i, lending_decisions)) #value to everyone else without i present - value to everyone else with i present
-        expected_payout[i] = np.sum(np.multiply(p[i,:],\
-                    lending_decisions[:n_borrowers])) - payments[i] #This is the expected payout from the recommender's perspective, assuming his/her beliefs are true
-    '''
-    for i in range(n_recommenders): #loop over borrowers to calculate payment t and expected score
-        p_hat_less_i = np.delete(p_hat, i, 0)
-        weights_less_i = np.delete(weight_less_i, i)
-        sums_i = np.matmul(p_hat_less_i, weights_less_i.T)
-        sums_i.sort()
-        threshold = sums_i[-budget]
-        sums_i = np.matmul(p_hat_less_i, weights_less_i.T)
-        lending_decisions_i = np.where(sums_i[:n_borrowers] > threshold, 1, 0) #Will not allocate any reserve borrowers yet
-        lending_decisions_i = np.hstack((lending_decisions_i, np.zeros((budget,))))
-        if np.sum(lending_decisions_i) < budget: #allocates just enough reserve borrowers to fill the budget quota
-            lending_decisions_i[n_borrowers: int(n_borrowers + budget - \
-                             np.sum(lending_decisions_i))] = 1
-        payments[i] = np.sum(np.multiply(sums_i, lending_decisions_i)) - \
-                    np.sum(np.multiply(sums_i, lending_decisions)) #value to everyone else without i present - value to everyone else with i present
-        expected_payout[i] = np.sum(np.multiply(p[i,:],\
-                    lending_decisions[:n_borrowers])) - payments[i] #This is the expected payout from the recommender's perspective, assuming his/her beliefs are true
 
+    for j in range(n_recommenders): #loop over borrowers to calculate payment t and expected score
+        p_hat_less_j = np.delete(p_hat, j, 0)
+        weights_aug_less_j = np.delete(weights_aug, j)
+        sums_j = np.matmul(weights_aug_less_j, p_hat_less_j)
+        sums_j.sort()
+        threshold = sums_j[-budget]
+        sums_j = np.matmul(weights_aug_less_j, p_hat_less_j)
+        lending_decisions_j = np.where(sums_j[:n_borrowers] >= threshold, 1, 0) #Will not allocate any reserve borrowers yet
+        lending_decisions_j = np.hstack((lending_decisions_j, np.zeros((budget,))))
+        if np.sum(lending_decisions_j) < budget: #allocates just enough reserve borrowers to fill the budget quota
+            lending_decisions_j[n_borrowers: int(n_borrowers + budget - \
+                             np.sum(lending_decisions_j))] = 1
+        payments[j] = np.sum(np.multiply(sums_j, lending_decisions_j)) - \
+                    np.sum(np.multiply(sums_j, lending_decisions)) #value to everyone else without i present - value to everyone else with i present
+        expected_payout[j] = np.sum(np.multiply(p[j,:],\
+                    lending_decisions[:n_borrowers]))*weights[j] - payments[j] #This is the expected payout from the recommender's perspective, assuming his/her beliefs are true
+
+    #print('payments t:', np.round(payments,2))
+    #print('expected_payout', np.round(expected_payout,2))
     #3 Repayment Outcomes
     repayment_outcomes = np.multiply(np.where(np.random.random(\
                 n_borrowers) > (1-repayment_probs), 1, 0),\
                 lending_decisions[:n_borrowers])
-    actual_payout = np.sum(repayment_outcomes) - payments
+    actual_payout = np.sum(repayment_outcomes)*weights - payments
+    #actual_payout = np.sum(repayment_outcomes) - payments
+    #print('repayment_outcomes', repayment_outcomes)
+    print('actual_payout',np.round(actual_payout,2))
 
     return expected_payout, actual_payout, lending_decisions[:n_borrowers],\
                 repayment_outcomes
@@ -345,15 +348,15 @@ def brier(preds, outcomes):
 
 ##### CODE TO RUN THE SIMULATION #####
 
-n = 10 #Run the simulation n times
+n = 5 #Run the simulation n times
 
 for k in range(n):
     print('Iteration: ',k)
     #1 Parameter Settings
     n_recommenders = 5
-    n_borrowers = 20
-    budget = 2 #Maximum number of borrowers who can receive a loan
-    c = .7 #Lending threshold rating
+    n_borrowers = 6
+    budget = 4 #Maximum number of borrowers who can receive a loan
+    c = .6 #Lending threshold rating
 
     #2 Simulation Loops
     if k == 0: n_loans_array, n_repayments_array, mean_recommender_comp_array,\
