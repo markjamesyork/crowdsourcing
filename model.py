@@ -1,10 +1,12 @@
-# agents.py
+# model.py
+# please use Python >=3.9
 
 from enum import Enum, auto
 import numpy as np
 import numpy.typing as npt
 import numpy.testing as testing
 import pulp
+from typing import Optional
 
 
 class BeliefNoise(Enum):
@@ -13,7 +15,7 @@ class BeliefNoise(Enum):
 
 
 class ReportStrategy(Enum):
-    TRUE = auto()
+    TRUE_BELIEFS = auto()
     GAUSSIAN = auto()
 
 
@@ -22,46 +24,60 @@ class ElicitationStrategy(Enum):
     VCG = auto()
 
 
-class Model:
+class LendingModel:
     '''Simulates borrowers-recommenders-lender system'''
 
+    @classmethod
     @property
-    def EPSILON(self) -> float:
+    def EPSILON(cls) -> float:
         return 0.01
 
     def __init__(self,
                  n: int,    # number of recommenders
                  m: int,    # number of borrowers
-                 true_probabilities: npt.ArrayLike = None,  # repayment probabilities
-                 true_beliefs: npt.ArrayLike = None,
-                 threshold: float = 0.5,                    # lender's threshold
-                 weights: npt.ArrayLike = None,             # weights given to recommenders
-                 liquidity: float = None,
+                 # borrower repayment probabilities
+                 true_probabilities: Optional[npt.ArrayLike] = None,
+                 # recommenders' beliefs of probs
+                 true_beliefs: Optional[npt.ArrayLike] = None,
+                 # recommenders' reports of probs
+                 reports: Optional[npt.ArrayLike] = None,
+                 # lender's threshold
+                 threshold: float = 0.5,
+                 # weights given to recommenders
+                 weights: Optional[npt.ArrayLike] = None,
+                 # max # of accepted borrowers
+                 liquidity: Optional[int] = None,
                  ) -> None:
         assert n > 0, 'init(): n must be positive'
         assert m > 0, 'init(): m must be positive'
 
         # borrowers
         self.m = np.int32(m)
-        self.true_probabilities = np.array(nullish(true_probabilities, np.random.rand(m)),
+        self.true_probabilities = np.array(nullish(true_probabilities,
+                                                   np.random.rand(m)),
                                            dtype=np.float64)
         self.outcomes = np.zeros(m, np.int32)
 
         # recommenders
         self.n = np.int32(n)
         # recommenders have same true beliefs by default
-        self.true_beliefs = np.array(nullish(true_beliefs, np.tile(self.true_probabilities.transpose(), (self.n, 1))),
+        self.true_beliefs = np.array(nullish(true_beliefs,
+                                             np.tile(self.true_probabilities.transpose(), (self.n, 1))),
                                      dtype=np.float64)
-
-        self.reports = np.zeros((n, m))
+        # recommenders make true reports by default
+        self.reports = np.array(nullish(reports,
+                                        self.true_beliefs),
+                                dtype=np.float64)
         self.immediate_payments = np.zeros(n)
         self.outcome_payments = np.zeros((n, m))
 
         # lender
         self.threshold = np.float64(threshold)
-        self.weights = np.array(nullish(weights, np.full(n, 1/n)),
+        self.weights = np.array(nullish(weights,
+                                        np.full(n, 1/n)),
                                 dtype=np.float64)
-        self.liquidity = np.int32(nullish(liquidity, m))
+        self.liquidity = np.int32(nullish(liquidity,
+                                          m))
         self.allocation = np.zeros(m, np.int32)
 
         # flags to ensure proper usage
@@ -82,7 +98,7 @@ class Model:
 
         # dimensionality checks
         assert self.true_probabilities.shape == (
-            self.m, ), 'init(): Dimension of true probabilities must be (n)'
+            self.m, ), 'init(): Dimension of true probabilities must be (m)'
         assert self.true_beliefs.shape == (
             self.n, self.m), 'init(): Dimension of true beliefs must be (n x m)'
         assert self.reports.shape == (
@@ -105,21 +121,20 @@ class Model:
             self.true_beliefs += np.random.normal(0, param, (self.n, self.m))
         else:
             assert False, 'add_beliefs_noise(): Belief noise type invalid'
-        self.true_beliefs = truncate(self.true_beliefs)
+        self.true_beliefs = np.clip(self.true_beliefs, 0, 1)
 
     def make_reports(self, type: ReportStrategy, param: float = 0.05) -> None:
         self.REPORT_STRATEGY = type
-        if type == ReportStrategy.TRUE:
+        if type == ReportStrategy.TRUE_BELIEFS:
             self.reports = self.true_beliefs
         elif type == ReportStrategy.GAUSSIAN:
             self.reports = self.true_beliefs + \
                 np.random.normal(0, param, (self.n, self.m))
         else:
             assert False, 'make_reports(): Report type invalid'
-        self.reports = truncate(self.reports, min=self.EPSILON)
+        self.reports = np.clip(self.reports, LendingModel.EPSILON, 1)
 
     def elicit(self, type: ElicitationStrategy) -> None:
-        assert self.REPORT_STRATEGY, 'must call make_reports() before calling elicit()'
         assert not self.ELICITATION_STRATEGY, 'cannot elicit() twice'
         self.ELICITATION_STRATEGY = type
         if type == ElicitationStrategy.WINKLER:
@@ -133,8 +148,9 @@ class Model:
         '''util for _elicit_winkler()'''
         report = self.reports[i, q]
         outcome = self.outcomes[q]
-        min_report = truncate(1/self.weights[i] * (self.threshold - (self._get_linear_aggregator(q) - self.weights[i] * report)),
-                              min=self.EPSILON)
+        min_report = np.clip(1/self.weights[i] * (self.threshold - (self._get_linear_aggregator(q) -
+                                                                    self.weights[i] * report)),
+                             LendingModel.EPSILON, 1)
 
         assert outcome == 0 or outcome == 1, '_get_score_winkler(): Outcome must be binary'
 
@@ -146,30 +162,28 @@ class Model:
             return (np.log(1 - report) - np.log(1 - min_report)) / (-1 * np.log(min_report))
 
     def _get_linear_aggregator(self, q: int) -> np.float64:
-        '''util for _get_linear_aggregator()'''
+        '''util for _get_score_winkler() and _elicit_winkler()'''
         return np.dot(self.weights, self.reports[:, q])
 
     def _elicit_winkler(self) -> None:
-        for q in range(self.m):
-            belief = self._get_linear_aggregator(q)
-            if belief > self.threshold:
-                self.allocation[q] = 1
-                self.outcomes[q] = np.random.binomial(
-                    1, self.true_probabilities[q])
-                for i in range(self.n):
-                    self.outcome_payments[i, q] = self._get_score_winkler(i, q)
+        beliefs = [self._get_linear_aggregator(q) for q in range(self.m)]
+        self.allocation = (beliefs > self.threshold).astype(int)
+        probs = np.where(self.allocation, self.true_probabilities, 0)
+        self.outcomes = np.random.binomial(1, probs)
+        self.outcome_payments = np.array(
+            [[self._get_score_winkler(i, q) for q in range(self.m)] for i in range(self.n)])
 
-    def _get_vcg_allocation(self, ignore_i: int = -1) -> npt.NDArray:
+    def _get_vcg_allocation(self, ignore_i: Optional[int] = None) -> npt.NDArray:
         '''util for _elicit_vcg()'''
-        assert isinstance(
+        assert ignore_i is None or isinstance(
             ignore_i, int), '_get_vcg_allocation(): ignoreRecommender must be int'
 
         solver = pulp.LpProblem('VCG_Allocation', pulp.LpMaximize)
 
         # ignore_i removes effect of recommender i
-        weights = self.weights if ignore_i < 0 else np.delete(
+        weights = self.weights if ignore_i is None else np.delete(
             self.weights, ignore_i)
-        reports = self.reports if ignore_i < 0 else np.delete(
+        reports = self.reports if ignore_i is None else np.delete(
             self.reports, ignore_i, 0)
 
         coeffs = np.append(weights.dot(reports),
@@ -194,7 +208,7 @@ class Model:
         # remove reserve borrowers
         return allocation[:coeffs.size - self.liquidity]
 
-    def _get_scores_vcg(self, allocation) -> npt.NDArray:
+    def _get_scores_vcg(self, allocation: npt.NDArray) -> npt.NDArray:
         return self.reports.dot(allocation) * self.weights
 
     def _elicit_vcg(self) -> None:
@@ -235,41 +249,41 @@ class Model:
             f'outcome payments:\n{self.outcome_payments}'
 
 
-def demo():
+def demo() -> None:
     # Default is uniformly random repayment probabilities, true beliefs that match
     # real probabilities, threshold of 0.5, equal recommender weights, unconstrained liquidity
-    model = Model(n=5, m=3)
+    model = LendingModel(n=5, m=3)
     model.add_beliefs_noise(BeliefNoise.GAUSSIAN)
-    model.make_reports(ReportStrategy.TRUE)
+    model.make_reports(ReportStrategy.TRUE_BELIEFS)
     model.elicit(ElicitationStrategy.WINKLER)
     print(model)
 
     # You can also constrain liquidity, use VCG, and add a bunch of custom values
-    model = Model(n=3,
-                  m=4,
-                  true_probabilities=[0.1, 0.4, 0.5, 0.7],
-                  true_beliefs=[[0.1, 0.4, 0.5, 0.7],
-                                [0.2, 0.5, 0.6, 0.8],
-                                [0.05, 0.45, 0.3, 0.5]],
-                  threshold=0.3,
-                  weights=[0.7, 0.2, 0.1],
-                  liquidity=1)
+    model = LendingModel(n=3,
+                         m=4,
+                         true_probabilities=[0.1, 0.4, 0.5, 0.7],
+                         true_beliefs=[[0.1, 0.4, 0.5, 0.7],
+                                       [0.2, 0.5, 0.6, 0.8],
+                                       [0.05, 0.45, 0.3, 0.5]],
+                         threshold=0.3,
+                         weights=[0.4, 0.3, 0.3],
+                         liquidity=1)
     model.add_beliefs_noise(BeliefNoise.GAUSSIAN)
-    model.make_reports(ReportStrategy.TRUE)
+    model.make_reports(ReportStrategy.GAUSSIAN)
     model.elicit(ElicitationStrategy.VCG)
-    print(model)
+    # print(model)
 
 
-def main():
+def collusion() -> None:
+    model = LendingModel(n=9, m=8)
+    # look in other file
+
+
+def main() -> None:
     demo()
 
 
 # UTILS
-
-def truncate(x: np.ndarray, min: float = 0, max: float = 1) -> np.ndarray:
-    '''performs double (min-max) truncation on all values in array x'''
-    return np.minimum(max, np.maximum(min, x))
-
 
 def nullish(x, y):
     '''nullish coalescing operator: return x if x is not null else y'''

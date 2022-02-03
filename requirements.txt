@@ -1,2 +1,7 @@
+keras
+matplotlib
 numpy
 pulp
+scipy
+sklearn
+tensorflow
