@@ -161,6 +161,67 @@ def brier_score(outcomes: npt.ArrayLike, predictions: npt.ArrayLike) -> float:
     return mean_squared_error(outcomes, predictions)
 
 
+def test_knowledge() -> None:
+    N_ITERS = 100
+    n, m = 10, 15
+    data = []
+    output = []
+    for _ in range(N_ITERS):
+        _, reports, collusive_i = RecommenderDataGenerator(n=n, m=m).gen(
+            ReportStrategy.COLLUSIVE_ADV)
+        included_non_colluder = False
+        for i in range(n):
+            # remove effect of recommender i
+            avg_reports = np.mean(np.delete(reports, i, axis=0), axis=0)
+            sd_reports = np.mean(np.delete(reports, i, axis=0), axis=0)
+            probs = []
+            for j in range(len(sd_reports)):
+                prob = prob_not_as_extreme(
+                    reports[i, j], avg_reports[j], sd_reports[j])
+                probs.append(prob)
+            if i == collusive_i:
+                data.append(np.array(probs))
+                output.append(i == collusive_i)
+            elif not included_non_colluder:
+                included_non_colluder = True
+                data.append(np.array(probs))
+                output.append(i == collusive_i)
+
+    X = np.array(data)
+    y = np.array(output)
+
+    X = np.array(MinMaxScaler().fit_transform(X))
+
+    model = Sequential()
+    model.add(Dense(8, activation='relu', input_dim=m))
+    model.add(Dense(8, activation='relu'))
+    model.add(Dense(1, activation='sigmoid'))
+    model.compile(loss='binary_crossentropy',
+                  optimizer='adam',
+                  metrics=['accuracy'])
+    history = model.fit(X, y, validation_split=0.2,
+                        epochs=100, batch_size=10, verbose=0)
+    for layer in model.layers:
+        weights = layer.get_weights()
+    plt.plot(history.history['accuracy'])
+    plt.plot(history.history['val_accuracy'])
+    plt.title('model accuracy')
+    plt.ylabel('accuracy')
+    plt.xlabel('epoch')
+    plt.legend(['train', 'val'], loc='upper left')
+    plt.show()
+
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.title('model loss')
+    plt.ylabel('loss')
+    plt.xlabel('epoch')
+    plt.legend(['train', 'val'], loc='upper left')
+    plt.show()
+
+    print(sum(y) / len(y))
+
+
 def test_creditworthiness() -> None:
     N_ITERS = 100
     n, m = 10, 15
@@ -218,9 +279,13 @@ def test_creditworthiness() -> None:
     print(sum(y) / len(y))
 
 
+def test_calibration():
+
+
 def main() -> None:
     # test_brier()
-    test_creditworthiness()
+    test_knowledge()
+    # test_creditworthiness()
 
 
 if __name__ == '__main__':
