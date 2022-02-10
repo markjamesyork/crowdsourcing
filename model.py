@@ -146,6 +146,7 @@ class LendingModel:
 
     def _get_score_winkler(self, i: int, q: int) -> np.float64:
         '''util for _elicit_winkler()'''
+        # see vectorized implementation below
         report = self.reports[i, q]
         outcome = self.outcomes[q]
         min_report = np.clip(1/self.weights[i] * (self.threshold - (self._get_linear_aggregator(q) -
@@ -166,12 +167,32 @@ class LendingModel:
         return np.dot(self.weights, self.reports[:, q])
 
     def _elicit_winkler(self) -> None:
-        beliefs = [self._get_linear_aggregator(q) for q in range(self.m)]
+        # beliefs = [self._get_linear_aggregator(q) for q in range(self.m)]
+        beliefs = np.matmul(self.weights, self.reports)
         self.allocation = (beliefs > self.threshold).astype(int)
         probs = np.where(self.allocation, self.true_probabilities, 0)
         self.outcomes = np.random.binomial(1, probs)
-        self.outcome_payments = np.array(
-            [[self._get_score_winkler(i, q) for q in range(self.m)] for i in range(self.n)])
+        # self.outcome_payments = np.array(
+        #     [[self._get_score_winkler(i, q) for q in range(self.m)] for i in range(self.n)])
+
+        # this is an nxm matrix after a ton of array broadcasting
+        min_reports = (self.threshold - (beliefs - self.reports *
+                       self.weights[:, np.newaxis])) / self.weights[:, np.newaxis]
+        min_reports = np.clip(
+            min_reports, LendingModel.EPSILON, 1 - LendingModel.EPSILON)
+
+        # more vectorized computation
+        payment_indicators = (self.reports > min_reports).astype(int)
+        reports = np.clip(self.reports, LendingModel.EPSILON,
+                          1 - LendingModel.EPSILON)
+        print(payment_indicators)
+        payments_repaid = self.outcomes * \
+            (np.log(reports) - np.log(min_reports)) / \
+            (-1 * np.log(min_reports))
+        payments_not_repaid = (1 - self.outcomes) * (np.log(1 - reports) -
+                                                     np.log(1 - min_reports)) / (-1 * np.log(min_reports))
+        self.outcome_payments = payment_indicators * \
+            (payments_repaid + payments_not_repaid)
 
     def _get_vcg_allocation(self, ignore_i: Optional[int] = None) -> npt.NDArray:
         '''util for _elicit_vcg()'''

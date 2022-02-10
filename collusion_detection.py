@@ -201,8 +201,8 @@ def test_knowledge() -> None:
                   metrics=['accuracy'])
     history = model.fit(X, y, validation_split=0.2,
                         epochs=100, batch_size=10, verbose=0)
-    for layer in model.layers:
-        weights = layer.get_weights()
+    # for layer in model.layers:
+    #     weights = layer.get_weights()
     plt.plot(history.history['accuracy'])
     plt.plot(history.history['val_accuracy'])
     plt.title('model accuracy')
@@ -258,8 +258,8 @@ def test_creditworthiness() -> None:
                   metrics=['accuracy'])
     history = model.fit(X, y, validation_split=0.2,
                         epochs=100, batch_size=10, verbose=0)
-    for layer in model.layers:
-        weights = layer.get_weights()
+    # for layer in model.layers:
+    #     weights = layer.get_weights()
     plt.plot(history.history['accuracy'])
     plt.plot(history.history['val_accuracy'])
     plt.title('model accuracy')
@@ -280,6 +280,7 @@ def test_creditworthiness() -> None:
 
 
 def test_calibration():
+    pass
 
 
 def main() -> None:
