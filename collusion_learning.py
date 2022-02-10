@@ -44,15 +44,13 @@ def calculate_profit(reports):
                    tf.tile(tf.reshape(weights, [N, 1]), [1, M])))) * tf.tile(1 / tf.reshape(weights, [N, 1]), [1, M])
     min_reports = tf.clip_by_value(min_reports, EPSILON, 1 - EPSILON)
 
-    payment_indicators = tf.cast(tf.greater(reports, min_reports), tf.float32)
-
     payments_repaid = expected_outcomes * \
         (tf.math.log(reports) - tf.math.log(min_reports)) / \
         (-1 * tf.math.log(min_reports))
     payments_not_repaid = (1 - expected_outcomes) * (tf.math.log(1 - reports) -
                                                      tf.math.log(1 - min_reports)) / (-1 * tf.math.log(min_reports))
-    outcome_payments = payment_indicators * \
-        (payments_repaid + payments_not_repaid)
+    outcome_payments = tf.where(tf.greater(
+        reports, min_reports), payments_repaid + payments_not_repaid, 0)
     return -1 * tf.math.reduce_sum(outcome_payments)
 
 
@@ -87,7 +85,7 @@ def main() -> None:
     model.compile(loss=custom_loss(X),
                   optimizer='adam')
     history = model.fit(X, y, validation_split=0.2,
-                        epochs=100, batch_size=16, verbose=0)
+                        epochs=400, batch_size=16, verbose=0)
 
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
