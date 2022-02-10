@@ -2,8 +2,9 @@
 # please use Python >=3.9
 
 from enum import Enum, auto
+from keras import Input, Model
 from keras.models import Sequential
-from keras.layers import Dense
+from keras.layers import Dense, ReLU, LeakyReLU
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
@@ -17,12 +18,12 @@ from statistics import NormalDist
 import tensorflow as tf
 from typing import Optional, Union
 
-THRESHOLD = 0.5
+THRESHOLD = 0.1
 N = 5
 M = 6
-EPSILON = 0.005
+EPSILON = 0.001
 
-N_TEST_CASES = 300
+N_TEST_CASES = 500
 PROBS = tf.random.uniform([M], 0.1, 0.9)
 print(PROBS)
 
@@ -30,6 +31,8 @@ print(PROBS)
 def calculate_profit(reports):
     # have to code simulation in tensorflow in differentiable way
     reports = tf.reshape(reports, [N, M])
+    reports = tf.clip_by_value(reports, EPSILON, 1 - EPSILON)
+    # reports += EPSILON
     weights = tf.fill([N], 1/N)
     beliefs = tf.linalg.matvec(reports, weights, transpose_a=True)
     allocation = tf.greater(beliefs, THRESHOLD)
@@ -42,7 +45,6 @@ def calculate_profit(reports):
     min_reports = tf.clip_by_value(min_reports, EPSILON, 1 - EPSILON)
 
     payment_indicators = tf.cast(tf.greater(reports, min_reports), tf.float32)
-    reports = tf.clip_by_value(reports, EPSILON, 1 - EPSILON)
 
     payments_repaid = expected_outcomes * \
         (tf.math.log(reports) - tf.math.log(min_reports)) / \
@@ -68,17 +70,24 @@ def custom_loss(X):
 
 
 def main() -> None:
-    X = np.ones((N_TEST_CASES, N * M))
+    X = np.random.random((N_TEST_CASES, N * M))
+    # X = np.full((N_TEST_CASES, N * M), 0.5)
     y = np.zeros((N_TEST_CASES, N * M))
 
-    model = Sequential()
-    model.add(Dense(N * M, activation='relu', input_dim=N * M))
-    model.add(Dense(N * M, activation='relu'))
-    model.add(Dense(N * M, activation='relu'))
+    inputs = Input(shape=(N * M, ))
+    layer = Dense(N * M)(inputs)
+    layer = Dense(N * M)(layer)
+    outputs = Dense(N * M)(layer)
+
+    # layer = LeakyReLU(alpha=0.05)(layer)
+    # outputs = ReLU()(layer)
+
+    model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
+
     model.compile(loss=custom_loss(X),
                   optimizer='adam')
     history = model.fit(X, y, validation_split=0.2,
-                        epochs=400, batch_size=16, verbose=0)
+                        epochs=100, batch_size=16, verbose=0)
 
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
@@ -88,7 +97,7 @@ def main() -> None:
     plt.legend(['train', 'val'], loc='upper left')
     plt.show()
 
-    predictions = model.predict(np.ones((1, N * M)))
+    predictions = model.predict(np.full((1, N * M), 0.5))
     print(predictions.reshape((N, M)))
 
 
