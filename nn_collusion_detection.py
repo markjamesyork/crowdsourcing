@@ -6,7 +6,7 @@ from keras.models import Sequential
 from keras.layers import Dense
 import matplotlib.pyplot as plt
 import numpy as np
-import numpy.typing as npt
+# import numpy.typing as npt
 import random
 import scipy.stats as scipystats
 from sklearn.metrics import mean_squared_error
@@ -49,7 +49,7 @@ class SingleRecommenderDataGenerator:
                                     0, 1)
         self.outcomes = np.random.binomial(1, self.true_probs)
 
-    def gen(self, type: ReportStrategy) -> tuple[npt.NDArray, npt.NDArray]:
+    def gen(self, type: ReportStrategy):
         '''returns outcomes and reports'''
         if type == ReportStrategy.TRUE_BELIEFS:
             return self.outcomes, self.true_beliefs
@@ -88,7 +88,7 @@ class RecommenderDataGenerator:
                                     0, 1)
         self.outcomes = np.random.binomial(1, self.true_probs)
 
-    def gen(self, type: ReportStrategy) -> tuple[npt.NDArray, npt.NDArray, Optional[int]]:
+    def gen(self, type: ReportStrategy):
         '''returns outcomes and reports'''
         if type == ReportStrategy.TRUE_BELIEFS:
             return self.outcomes, self.true_beliefs
@@ -157,7 +157,7 @@ def test_brier() -> None:
         # x = np.random.binomial()
 
 
-def brier_score(outcomes: npt.ArrayLike, predictions: npt.ArrayLike) -> float:
+def brier_score(outcomes, predictions) -> float:
     return mean_squared_error(outcomes, predictions)
 
 

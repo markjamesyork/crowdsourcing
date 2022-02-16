@@ -1,7 +1,8 @@
-keras
+keras==2.6.0
 matplotlib
-numpy
+numpy==1.19.*
 pulp
+ray==1.10.0
 scipy
 sklearn
-tensorflow
+tensorflow==2.6.0

@@ -3,7 +3,7 @@
 
 from enum import Enum, auto
 import numpy as np
-import numpy.typing as npt
+# import numpy.typing as npt
 import numpy.testing as testing
 import pulp
 from typing import Optional
@@ -36,15 +36,15 @@ class LendingModel:
                  n: int,    # number of recommenders
                  m: int,    # number of borrowers
                  # borrower repayment probabilities
-                 true_probabilities: Optional[npt.ArrayLike] = None,
+                 true_probabilities=None,
                  # recommenders' beliefs of probs
-                 true_beliefs: Optional[npt.ArrayLike] = None,
+                 true_beliefs=None,
                  # recommenders' reports of probs
-                 reports: Optional[npt.ArrayLike] = None,
+                 reports=None,
                  # lender's threshold
                  threshold: float = 0.5,
                  # weights given to recommenders
-                 weights: Optional[npt.ArrayLike] = None,
+                 weights=None,
                  # max # of accepted borrowers
                  liquidity: Optional[int] = None,
                  ) -> None:
@@ -185,7 +185,6 @@ class LendingModel:
         payment_indicators = (self.reports > min_reports).astype(int)
         reports = np.clip(self.reports, LendingModel.EPSILON,
                           1 - LendingModel.EPSILON)
-        print(payment_indicators)
         payments_repaid = self.outcomes * \
             (np.log(reports) - np.log(min_reports)) / \
             (-1 * np.log(min_reports))
@@ -194,7 +193,7 @@ class LendingModel:
         self.outcome_payments = payment_indicators * \
             (payments_repaid + payments_not_repaid)
 
-    def _get_vcg_allocation(self, ignore_i: Optional[int] = None) -> npt.NDArray:
+    def _get_vcg_allocation(self, ignore_i: Optional[int] = None):
         '''util for _elicit_vcg()'''
         assert ignore_i is None or isinstance(
             ignore_i, int), '_get_vcg_allocation(): ignoreRecommender must be int'
@@ -229,7 +228,7 @@ class LendingModel:
         # remove reserve borrowers
         return allocation[:coeffs.size - self.liquidity]
 
-    def _get_scores_vcg(self, allocation: npt.NDArray) -> npt.NDArray:
+    def _get_scores_vcg(self, allocation):
         return self.reports.dot(allocation) * self.weights
 
     def _elicit_vcg(self) -> None:
