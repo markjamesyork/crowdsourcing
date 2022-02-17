@@ -2,6 +2,7 @@
 # please use Python >=3.9
 
 from enum import Enum, auto
+import itertools
 from keras import Input, Model
 from keras.models import Sequential
 from keras.layers import Dense, ReLU, LeakyReLU, Concatenate
@@ -30,8 +31,21 @@ EPSILON = 0.001
 PROBS = tf.convert_to_tensor([0.24, 0.41, 0.53, 0.67, 0.72, 0.79])
 
 BATCH_SIZE = 16
-N_TEST_CASES = BATCH_SIZE * 32
+N_TEST_CASES = BATCH_SIZE * 64
 
+
+# UTIL FUNCTIONS
+
+def sigmoid(x, threshold, steepness=50):
+    return tf.math.exp(steepness*(x-threshold)) / (1 + tf.math.exp(steepness*(x-threshold)))
+
+
+def all_binary_strings(n):
+    '''returns all binary strings of length n'''
+    return np.array([i for i in itertools.product([0, 1], repeat=n)])
+
+
+# LOSS FUNCTIONS
 
 def calculate_loss_in_profit(reports):
     # have to code simulation in tensorflow in differentiable way
@@ -65,10 +79,6 @@ def profit_loss(y_true, y_pred):
     result = tf.map_fn(
         lambda report: calculate_loss_in_profit(report), reports)
     return tf.math.reduce_sum(result)
-
-
-def sigmoid(x, threshold, steepness=50):
-    return tf.math.exp(steepness*(x-threshold)) / (1 + tf.math.exp(steepness*(x-threshold)))
 
 
 def calculate_loss_in_profit_sigmoid(reports):
@@ -144,6 +154,8 @@ def mixed_loss(desirability_importance=0.5):
     return desirability_and_profit_loss
 
 
+# NEURAL NETWORKS
+
 def profit_reports() -> None:
     # here we are just maximizing profit from the mechanism, resulting in accurate reports
     # X doesn't do anything, it's just stochastic noise for the network to run
@@ -212,9 +224,13 @@ def desire_borrowers() -> None:
     # in this case the quantity that we are maximizing is actually the probabilities
     # that the desired people get loans
     # here, x_{i,q} represents how much that recommender i wants q to get a loan.
-    indices = np.random.randint(0, M, N_TEST_CASES)
-    X = np.array([np.tile([int(j == index) for j in range(M)], N)
-                 for _, index in enumerate(indices)], dtype=np.float32)
+
+    # when the coalition all agrees on one borrower
+    # indices = np.random.randint(0, M, N_TEST_CASES)
+    # X = np.array([np.tile([int(j == index) for j in range(M)], N)
+    #              for _, index in enumerate(indices)], dtype=np.float32)
+
+    X = np.random.randint(0, 2, (N_TEST_CASES, N * M))
 
     # y is ignored
     y = np.zeros((N_TEST_CASES, N * M))
@@ -258,9 +274,11 @@ def desire_borrowers_and_profit() -> None:
     # in this case recommenders care about both profits and helping their desired borrower get a loan
 
     # here, x_{i,q} represents how much that recommender i wants q to get a loan.
-    indices = np.random.randint(0, M, N_TEST_CASES)
-    X = np.array([np.tile([int(j == index) for j in range(M)], N)
-                 for _, index in enumerate(indices)], dtype=np.float32)
+    # indices = np.random.randint(0, M, N_TEST_CASES)
+    # X = np.array([np.tile([int(j == index) for j in range(M)], N)
+    #              for _, index in enumerate(indices)], dtype=np.float32)
+
+    X = np.random.randint(0, 2, (N_TEST_CASES, N * M))
 
     # y is ignored
     y = np.zeros((N_TEST_CASES, N * M))
@@ -278,7 +296,7 @@ def desire_borrowers_and_profit() -> None:
     model.compile(loss=mixed_loss(0.5),
                   optimizer='adam')
     history = model.fit(X, y, validation_split=0.2,
-                        epochs=100, batch_size=BATCH_SIZE, verbose=0)
+                        epochs=300, batch_size=BATCH_SIZE, verbose=0)
 
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
