@@ -3,9 +3,6 @@
 
 from enum import Enum, auto
 import itertools
-from keras import Input, Model
-from keras.models import Sequential
-from keras.layers import Dense, ReLU, LeakyReLU, Concatenate
 import matplotlib.pyplot as plt
 import numpy as np
 # import numpy.typing as npt
@@ -18,6 +15,10 @@ from sklearn.preprocessing import MinMaxScaler
 from statistics import NormalDist
 import sys
 import tensorflow as tf
+from tensorflow.keras import Input, Model
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, ReLU, LeakyReLU, Concatenate
+from tensorflow.keras.optimizers import Adam, SGD
 from tensorflow.python.framework.ops import disable_eager_execution
 from typing import Optional, Union
 
@@ -30,13 +31,13 @@ EPSILON = 0.001
 
 PROBS = tf.convert_to_tensor([0.24, 0.41, 0.53, 0.67, 0.72, 0.79])
 
-BATCH_SIZE = 16
-N_TEST_CASES = BATCH_SIZE * 64
+BATCH_SIZE = 32
+N_TEST_CASES = BATCH_SIZE * 32
 
 
 # UTIL FUNCTIONS
 
-def sigmoid(x, threshold, steepness=50):
+def sigmoid(x, threshold, steepness=70):
     return tf.math.exp(steepness*(x-threshold)) / (1 + tf.math.exp(steepness*(x-threshold)))
 
 
@@ -51,7 +52,6 @@ def calculate_loss_in_profit(reports):
     # have to code simulation in tensorflow in differentiable way
     reports = tf.reshape(reports, [N, M])
     reports = tf.clip_by_value(reports, EPSILON, 1 - EPSILON)
-    # reports += EPSILON
     weights = tf.fill([N], 1/N)
     beliefs = tf.linalg.matvec(reports, weights, transpose_a=True)
     allocation = tf.greater(beliefs, THRESHOLD)
@@ -148,8 +148,8 @@ def mixed_loss(desirability_importance=0.5):
     def desirability_and_profit_loss(y_true, y_pred):
         reports, _ = tf.split(y_pred, 2, axis=1)
         return desirability_importance * desirability_loss(y_true, y_pred) + \
-            (1-desirability_importance) * profit_loss(y_true,
-                                                      reports)  # need to remove desiderata for profit calc
+            (1-desirability_importance) * profit_loss_sigmoid(y_true,
+                                                              reports)  # need to remove desiderata for profit calc
 
     return desirability_and_profit_loss
 
@@ -172,7 +172,7 @@ def profit_reports() -> None:
     model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
 
     model.compile(loss=profit_loss,
-                  optimizer='adam')
+                  optimizer=Adam(amsgrad=True))
     history = model.fit(X, y, validation_split=0.2,
                         epochs=100, batch_size=BATCH_SIZE, verbose=0)
 
@@ -182,10 +182,13 @@ def profit_reports() -> None:
     plt.ylabel('loss')
     plt.xlabel('epoch')
     plt.legend(['train', 'val'], loc='upper left')
-    plt.show()
+    # plt.show()
 
     predictions = model.predict(np.full((1, N * M), 0.5))
-    print(predictions.reshape((N, M)))
+    predictions = predictions.reshape((N, M))
+    print('mean: ' + str(np.mean(predictions, axis=0)))
+    print('std: ' + str(np.std(predictions, axis=0)))
+    print('')
 
 
 def profit_reports_sigmoid() -> None:
@@ -204,7 +207,7 @@ def profit_reports_sigmoid() -> None:
     model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
 
     model.compile(loss=profit_loss_sigmoid,
-                  optimizer='adam')
+                  optimizer=Adam(amsgrad=True))
     history = model.fit(X, y, validation_split=0.2,
                         epochs=100, batch_size=BATCH_SIZE, verbose=0)
 
@@ -214,10 +217,13 @@ def profit_reports_sigmoid() -> None:
     plt.ylabel('loss')
     plt.xlabel('epoch')
     plt.legend(['train', 'val'], loc='upper left')
-    plt.show()
+    # plt.show()
 
     predictions = model.predict(np.full((1, N * M), 0.5))
-    print(predictions.reshape((N, M)))
+    predictions = predictions.reshape((N, M))
+    print('mean: ' + str(np.mean(predictions, axis=0)))
+    print('std: ' + str(np.std(predictions, axis=0)))
+    print('')
 
 
 def desire_borrowers() -> None:
@@ -244,7 +250,7 @@ def desire_borrowers() -> None:
     model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
 
     model.compile(loss=desirability_loss,
-                  optimizer='adam')
+                  optimizer=Adam(amsgrad=True))
     history = model.fit(X, y, validation_split=0.2,
                         epochs=50, batch_size=BATCH_SIZE, verbose=0)
 
@@ -254,7 +260,7 @@ def desire_borrowers() -> None:
     plt.ylabel('loss')
     plt.xlabel('epoch')
     plt.legend(['train', 'val'], loc='upper left')
-    plt.show()
+    # plt.show()
 
     # iterate over borrowers that recommenders care about
     tests = []
@@ -266,11 +272,13 @@ def desire_borrowers() -> None:
     predictions = model.predict(np.array(tests))
     predictions, _ = np.split(predictions, 2, axis=1)
     for prediction in predictions:
-        print(prediction.reshape((N, M)))
+        prediction = prediction.reshape((N, M))
+        print('mean: ' + str(np.mean(prediction, axis=0)))
+        print('std: ' + str(np.std(prediction, axis=0)))
         print('')
 
 
-def desire_borrowers_and_profit() -> None:
+def desire_borrowers_and_profit(alpha=0.5) -> None:
     # in this case recommenders care about both profits and helping their desired borrower get a loan
 
     # here, x_{i,q} represents how much that recommender i wants q to get a loan.
@@ -293,8 +301,8 @@ def desire_borrowers_and_profit() -> None:
 
     # the mixed loss coefficient is what percent the recommenders care about their desired borrower
     # as compared to profit
-    model.compile(loss=mixed_loss(0.5),
-                  optimizer='adam')
+    model.compile(loss=mixed_loss(alpha),
+                  optimizer=Adam(amsgrad=True))
     history = model.fit(X, y, validation_split=0.2,
                         epochs=300, batch_size=BATCH_SIZE, verbose=0)
 
@@ -304,7 +312,7 @@ def desire_borrowers_and_profit() -> None:
     plt.ylabel('loss')
     plt.xlabel('epoch')
     plt.legend(['train', 'val'], loc='upper left')
-    plt.show()
+    # plt.show()
 
     # iterate over borrowers that recommenders care about
     tests = []
@@ -316,15 +324,18 @@ def desire_borrowers_and_profit() -> None:
     predictions = model.predict(np.array(tests))
     predictions, _ = np.split(predictions, 2, axis=1)
     for prediction in predictions:
-        print(prediction.reshape((N, M)))
+        prediction = prediction.reshape((N, M))
+        print('mean: ' + str(np.mean(prediction, axis=0)))
+        print('std: ' + str(np.std(prediction, axis=0)))
         print('')
 
 
 def main() -> None:
     # profit_reports()
-    # profit_reports_sigmoid()
-    # desire_borrowers()
-    desire_borrowers_and_profit()
+    profit_reports_sigmoid()
+    desire_borrowers()
+    desire_borrowers_and_profit(0.5)
+    # desire_borrowers_and_profit(0.3)
 
 
 if __name__ == '__main__':
