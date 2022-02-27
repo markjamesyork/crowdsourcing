@@ -1,4 +1,4 @@
-# collusion_learning.py
+# nn_collusion_learning_winkler_coalition.py
 # please use Python >=3.9
 
 from enum import Enum, auto
@@ -27,8 +27,9 @@ from typing import Optional, Union
 
 # disable_eager_execution()
 
-THRESHOLD = 0.5
-N = 5
+THRESHOLD = 0.1
+N_COALITION = 3
+N_TOTAL = N_COALITION + 7
 M = 6
 EPSILON = 0.001
 
@@ -53,15 +54,18 @@ def all_binary_strings(n):
 
 def calculate_loss_in_profit(reports):
     # have to code simulation in tensorflow in differentiable way
-    reports = tf.reshape(reports, [N, M])
+    coalition_reports = tf.reshape(reports, [N_COALITION, M])
+    other_reports = tf.tile(tf.reshape(PROBS, [1, M]), [
+                            N_TOTAL - N_COALITION, 1])
+    reports = tf.concat([coalition_reports, other_reports], axis=0)
     reports = tf.clip_by_value(reports, EPSILON, 1 - EPSILON)
-    weights = tf.fill([N], 1/N)
+    weights = tf.fill([N_TOTAL], 1/N_TOTAL)
     beliefs = tf.linalg.matvec(reports, weights, transpose_a=True)
     allocation = tf.greater(beliefs, THRESHOLD)
     expected_outcomes = tf.where(allocation, PROBS, 0)
 
-    min_reports = (THRESHOLD - (tf.tile(tf.reshape(beliefs, [1, M]), [N, 1]) - (reports *
-                   tf.tile(tf.reshape(weights, [N, 1]), [1, M])))) * tf.tile(1 / tf.reshape(weights, [N, 1]), [1, M])
+    min_reports = (THRESHOLD - (tf.tile(tf.reshape(beliefs, [1, M]), [N_TOTAL, 1]) - (reports *
+                   tf.tile(tf.reshape(weights, [N_TOTAL, 1]), [1, M])))) * tf.tile(1 / tf.reshape(weights, [N_TOTAL, 1]), [1, M])
     min_reports = tf.clip_by_value(min_reports, EPSILON, 1 - EPSILON)
 
     payments_repaid = expected_outcomes * \
@@ -72,13 +76,15 @@ def calculate_loss_in_profit(reports):
     outcome_payments = tf.where(tf.greater(
         reports, min_reports), payments_repaid + payments_not_repaid, 0)
 
-    return -1 * tf.math.reduce_sum(outcome_payments)
+    coalition_outcome_payments = outcome_payments[:N_COALITION, :]
+    return -1 * tf.math.reduce_sum(coalition_outcome_payments)
 
 
 def profit_loss(y_true, y_pred):
     # ignore y_true since we don't know it
     # y_pred is the learned reports
-    reports = tf.reshape(y_pred, [tf.size(y_pred) / (N * M), N * M])
+    reports = tf.reshape(
+        y_pred, [tf.size(y_pred) / (N_COALITION * M), N_COALITION * M])
     result = tf.map_fn(
         lambda report: calculate_loss_in_profit(report), reports)
     return tf.math.reduce_sum(result)
@@ -86,16 +92,19 @@ def profit_loss(y_true, y_pred):
 
 def calculate_loss_in_profit_sigmoid(reports):
     # have to code simulation in tensorflow in differentiable way
-    reports = tf.reshape(reports, [N, M])
+    coalition_reports = tf.reshape(reports, [N_COALITION, M])
+    other_reports = tf.tile(tf.reshape(PROBS, [1, M]), [
+                            N_TOTAL - N_COALITION, 1])
+    reports = tf.concat([coalition_reports, other_reports], axis=0)
     reports = tf.clip_by_value(reports, EPSILON, 1 - EPSILON)
     # reports += EPSILON
-    weights = tf.fill([N], 1/N)
+    weights = tf.fill([N_TOTAL], 1/N_TOTAL)
     beliefs = tf.linalg.matvec(reports, weights, transpose_a=True)
     # use a sigmoid function instead of piecewise 0 for differentiability
     expected_outcomes = PROBS * sigmoid(beliefs, THRESHOLD)
 
-    min_reports = (THRESHOLD - (tf.tile(tf.reshape(beliefs, [1, M]), [N, 1]) - (reports *
-                   tf.tile(tf.reshape(weights, [N, 1]), [1, M])))) * tf.tile(1 / tf.reshape(weights, [N, 1]), [1, M])
+    min_reports = (THRESHOLD - (tf.tile(tf.reshape(beliefs, [1, M]), [N_TOTAL, 1]) - (reports *
+                   tf.tile(tf.reshape(weights, [N_TOTAL, 1]), [1, M])))) * tf.tile(1 / tf.reshape(weights, [N_TOTAL, 1]), [1, M])
     min_reports = tf.clip_by_value(min_reports, EPSILON, 1 - EPSILON)
 
     payments_repaid = expected_outcomes * \
@@ -107,13 +116,15 @@ def calculate_loss_in_profit_sigmoid(reports):
     outcome_payments = (payments_repaid + payments_not_repaid) * \
         sigmoid(reports, min_reports)
 
-    return -1 * tf.math.reduce_sum(outcome_payments)
+    coalition_outcome_payments = outcome_payments[:N_COALITION, :]
+    return -1 * tf.math.reduce_sum(coalition_outcome_payments)
 
 
 def profit_loss_sigmoid(y_true, y_pred):
     # ignore y_true since we don't know it
     # y_pred is the learned reports
-    reports = tf.reshape(y_pred, [tf.size(y_pred) / (N * M), N * M])
+    reports = tf.reshape(
+        y_pred, [tf.size(y_pred) / (N_COALITION * M), N_COALITION * M])
     result = tf.map_fn(
         lambda report: calculate_loss_in_profit_sigmoid(report), reports)
     return tf.math.reduce_sum(result)
@@ -121,15 +132,18 @@ def profit_loss_sigmoid(y_true, y_pred):
 
 def calculate_loss_in_desired_borrowers(reports, desiderata):
     # have to code simulation in tensorflow in differentiable way
-    reports = tf.reshape(reports, [N, M])
+    coalition_reports = tf.reshape(reports, [N_COALITION, M])
+    other_reports = tf.tile(tf.reshape(PROBS, [1, M]), [
+                            N_TOTAL - N_COALITION, 1])
+    reports = tf.concat([coalition_reports, other_reports], axis=0)
     reports = tf.clip_by_value(reports, EPSILON, 1 - EPSILON)
-    desiderata = tf.reshape(desiderata, [N, M])
-    weights = tf.fill([N], 1/N)
+    desiderata = tf.reshape(desiderata, [N_COALITION, M])
+    weights = tf.fill([N_TOTAL], 1/N_TOTAL)
     beliefs = tf.linalg.matvec(reports, weights, transpose_a=True)
     # sigmoid instead of step function for differentiability
     allocation = sigmoid(beliefs, THRESHOLD, 5)
     desirability_utilities = desiderata * \
-        tf.tile(tf.reshape(allocation, [1, M]), [N, 1])
+        tf.tile(tf.reshape(allocation, [1, M]), [N_COALITION, 1])
     return -1 * tf.math.reduce_sum(desirability_utilities)
 
 
@@ -138,9 +152,9 @@ def desirability_loss(y_true, y_pred):
     # y_pred is the learned reports concatenated with the inputs (how much each recommender cares about each borrower)
     reports, desiderata = tf.split(y_pred, 2, axis=1)
     reports = tf.reshape(
-        reports, [tf.size(reports) / (N * M), N * M])
+        reports, [tf.size(reports) / (N_COALITION * M), N_COALITION * M])
     desiderata = tf.reshape(
-        desiderata, [tf.size(desiderata) / (N * M), N * M])
+        desiderata, [tf.size(desiderata) / (N_COALITION * M), N_COALITION * M])
     result = tf.map_fn(
         lambda x: calculate_loss_in_desired_borrowers(x[0], x[1]), (reports, desiderata), dtype=tf.float32)
     return tf.math.reduce_sum(result)
@@ -162,15 +176,15 @@ def mixed_loss(desirability_importance=0.5):
 def profit_reports() -> None:
     # here we are just maximizing profit from the mechanism, resulting in accurate reports
     # X doesn't do anything, it's just stochastic noise for the network to run
-    X = np.random.random((N_TEST_CASES, N * M))
+    X = np.random.random((N_TEST_CASES, N_COALITION * M))
     # X = np.full((N_TEST_CASES, N * M), 0.5)
     # y is also ignored
     y = np.zeros((N_TEST_CASES, 1))
 
-    inputs = Input(shape=(N * M, ))
-    layer = Dense(N * M)(inputs)
-    layer = Dense(N * M)(layer)
-    outputs = Dense(N * M, activation='sigmoid')(layer)
+    inputs = Input(shape=(N_COALITION * M, ))
+    layer = Dense(N_COALITION * M)(inputs)
+    layer = Dense(N_COALITION * M)(layer)
+    outputs = Dense(N_COALITION * M, activation='sigmoid')(layer)
 
     model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
 
@@ -190,8 +204,8 @@ def profit_reports() -> None:
     plt.legend(['train', 'val'], loc='upper left')
     # plt.show()
 
-    predictions = model.predict(np.full((1, N * M), 0.5))
-    predictions = predictions.reshape((N, M))
+    predictions = model.predict(np.full((1, N_COALITION * M), 0.5))
+    predictions = predictions.reshape((N_COALITION, M))
     print('mean: ' + str(np.mean(predictions, axis=0)))
     print('std: ' + str(np.std(predictions, axis=0)))
     print('')
@@ -200,15 +214,15 @@ def profit_reports() -> None:
 def profit_reports_sigmoid() -> None:
     # here we are just maximizing profit from the mechanism, resulting in accurate reports
     # X doesn't do anything, it's just stochastic noise for the network to run
-    X = np.random.random((N_TEST_CASES, N * M))
+    X = np.random.random((N_TEST_CASES, N_COALITION * M))
     # X = np.full((N_TEST_CASES, N * M), 0.5)
     # y is also ignored
     y = np.zeros((N_TEST_CASES, 1))
 
-    inputs = Input(shape=(N * M, ))
-    layer = Dense(N * M)(inputs)
-    layer = Dense(N * M)(layer)
-    outputs = Dense(N * M, activation='sigmoid')(layer)
+    inputs = Input(shape=(N_COALITION * M, ))
+    layer = Dense(N_COALITION * M)(inputs)
+    layer = Dense(N_COALITION * M)(layer)
+    outputs = Dense(N_COALITION * M, activation='sigmoid')(layer)
 
     model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
 
@@ -228,8 +242,8 @@ def profit_reports_sigmoid() -> None:
     plt.legend(['train', 'val'], loc='upper left')
     # plt.show()
 
-    predictions = model.predict(np.full((1, N * M), 0.5))
-    predictions = predictions.reshape((N, M))
+    predictions = model.predict(np.full((1, N_COALITION * M), 0.5))
+    predictions = predictions.reshape((N_COALITION, M))
     print('mean: ' + str(np.mean(predictions, axis=0)))
     print('std: ' + str(np.std(predictions, axis=0)))
     print('')
@@ -245,15 +259,15 @@ def desire_borrowers() -> None:
     # X = np.array([np.tile([int(j == index) for j in range(M)], N)
     #              for _, index in enumerate(indices)], dtype=np.float32)
 
-    X = np.random.randint(0, 2, (N_TEST_CASES, N * M))
+    X = np.random.randint(0, 2, (N_TEST_CASES, N_COALITION * M))
 
     # y is ignored
-    y = np.zeros((N_TEST_CASES, N * M))
+    y = np.zeros((N_TEST_CASES, N_COALITION * M))
 
-    inputs = Input(shape=(N * M, ), dtype=tf.float32)
-    layer = Dense(N * M)(inputs)
-    layer = Dense(N * M)(layer)
-    layer = Dense(N * M, activation='sigmoid')(layer)
+    inputs = Input(shape=(N_COALITION * M, ), dtype=tf.float32)
+    layer = Dense(N_COALITION * M)(inputs)
+    layer = Dense(N_COALITION * M)(layer)
+    layer = Dense(N_COALITION * M, activation='sigmoid')(layer)
     outputs = Concatenate()([layer, inputs])
 
     model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
@@ -276,12 +290,12 @@ def desire_borrowers() -> None:
     for index in range(M):
         test = np.zeros(M)
         test[index] = 1
-        test = np.tile(test, N)
+        test = np.tile(test, N_COALITION)
         tests.append(test)
     predictions = model.predict(np.array(tests))
     predictions, _ = np.split(predictions, 2, axis=1)
     for prediction in predictions:
-        prediction = prediction.reshape((N, M))
+        prediction = prediction.reshape((N_COALITION, M))
         print('mean: ' + str(np.mean(prediction, axis=0)))
         print('std: ' + str(np.std(prediction, axis=0)))
         print('')
@@ -295,15 +309,15 @@ def desire_borrowers_and_profit(alpha=0.5) -> None:
     # X = np.array([np.tile([int(j == index) for j in range(M)], N)
     #              for _, index in enumerate(indices)], dtype=np.float32)
 
-    X = np.random.randint(0, 2, (N_TEST_CASES, N * M))
+    X = np.random.randint(0, 2, (N_TEST_CASES, N_COALITION * M))
 
     # y is ignored
-    y = np.zeros((N_TEST_CASES, N * M))
+    y = np.zeros((N_TEST_CASES, N_COALITION * M))
 
-    inputs = Input(shape=(N * M, ), dtype=tf.float32)
-    layer = Dense(N * M)(inputs)
-    layer = Dense(N * M)(layer)
-    layer = Dense(N * M, activation='sigmoid')(layer)
+    inputs = Input(shape=(N_COALITION * M, ), dtype=tf.float32)
+    layer = Dense(N_COALITION * M)(inputs)
+    layer = Dense(N_COALITION * M)(layer)
+    layer = Dense(N_COALITION * M, activation='sigmoid')(layer)
     outputs = Concatenate()([layer, inputs])
 
     model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
@@ -328,12 +342,12 @@ def desire_borrowers_and_profit(alpha=0.5) -> None:
     for index in range(M):
         test = np.zeros(M)
         test[index] = 1
-        test = np.tile(test, N)
+        test = np.tile(test, N_COALITION)
         tests.append(test)
     predictions = model.predict(np.array(tests))
     predictions, _ = np.split(predictions, 2, axis=1)
     for prediction in predictions:
-        prediction = prediction.reshape((N, M))
+        prediction = prediction.reshape((N_COALITION, M))
         print('mean: ' + str(np.mean(prediction, axis=0)))
         print('std: ' + str(np.std(prediction, axis=0)))
         print('')
@@ -342,9 +356,9 @@ def desire_borrowers_and_profit(alpha=0.5) -> None:
 def main() -> None:
     profit_reports()
     profit_reports_sigmoid()
-    # desire_borrowers()
-    # desire_borrowers_and_profit(0.5)
-    # desire_borrowers_and_profit(0.3)
+    desire_borrowers()
+    desire_borrowers_and_profit(0.5)
+    desire_borrowers_and_profit(0.3)
 
 
 if __name__ == '__main__':
