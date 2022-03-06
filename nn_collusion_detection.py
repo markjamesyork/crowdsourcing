@@ -283,6 +283,10 @@ def test_calibration():
     pass
 
 
+def test_optimal_collusion():
+    pass
+
+
 def main() -> None:
     # test_brier()
     test_knowledge()

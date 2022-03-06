@@ -32,10 +32,10 @@ N = 5
 M = 6
 EPSILON = 0.001
 
-PROBS = tf.convert_to_tensor([0.24, 0.41, 0.53, 0.67, 0.72, 0.79])
+PROBS = tf.convert_to_tensor([0.39, 0.41, 0.52, 0.57, 0.72, 0.76])
 
 BATCH_SIZE = 32
-N_TEST_CASES = BATCH_SIZE * 32
+N_TEST_CASES = BATCH_SIZE * 16
 
 
 # UTIL FUNCTIONS
@@ -151,8 +151,8 @@ def mixed_loss(desirability_importance=0.5):
     def desirability_and_profit_loss(y_true, y_pred):
         reports, _ = tf.split(y_pred, 2, axis=1)
         return desirability_importance * desirability_loss(y_true, y_pred) + \
-            (1-desirability_importance) * profit_loss_sigmoid(y_true,
-                                                              reports)  # need to remove desiderata for profit calc
+            (1-desirability_importance) * profit_loss(y_true,
+                                                      reports)  # need to remove desiderata for profit calc
 
     return desirability_and_profit_loss
 
@@ -313,7 +313,7 @@ def desire_borrowers_and_profit(alpha=0.5) -> None:
     model.compile(loss=mixed_loss(alpha),
                   optimizer=Adam(amsgrad=True))
     history = model.fit(X, y, validation_split=0.2,
-                        epochs=300, batch_size=BATCH_SIZE, verbose=0)
+                        epochs=50, batch_size=BATCH_SIZE, verbose=0)
 
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
