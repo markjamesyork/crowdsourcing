@@ -20,18 +20,18 @@ from keras.utils.vis_utils import plot_model
 
 # disable_eager_execution()
 
-THRESHOLD = 0.2
+THRESHOLD = 0.5
 N_COALITION = 3
 N_TOTAL = 6
 M = 4
 EPSILON = 0.001
 
-PROBS = [0.41, 0.52, 0.57, 0.76]
+PROBS = [0.43, 0.62, 0.70, 0.76]
 assert len(PROBS) == M
 PROBS = tf.convert_to_tensor(PROBS)
 
 BATCH_SIZE = 32
-N_TEST_CASES = BATCH_SIZE * 32
+N_TEST_CASES = BATCH_SIZE * 64
 
 
 # UTIL FUNCTIONS
@@ -58,7 +58,6 @@ def calculate_loss_in_profit(outcomes, reports):
     beliefs = tf.linalg.matvec(reports, weights, transpose_a=True)
     allocation = tf.greater(beliefs, THRESHOLD)
     outcomes = tf.cast(tf.where(allocation, outcomes, 0), dtype=tf.float32)
-
     min_reports = (THRESHOLD - (tf.tile(tf.reshape(beliefs, [1, M]), [N_TOTAL, 1]) - (reports *
                    tf.tile(tf.reshape(weights, [N_TOTAL, 1]), [1, M])))) * tf.tile(1 / tf.reshape(weights, [N_TOTAL, 1]), [1, M])
     min_reports = tf.clip_by_value(min_reports, EPSILON, 1 - EPSILON)
@@ -68,9 +67,9 @@ def calculate_loss_in_profit(outcomes, reports):
         (-1 * tf.math.log(min_reports))
     payments_not_repaid = (1 - outcomes) * (tf.math.log(1 - reports) -
                                             tf.math.log(1 - min_reports)) / (-1 * tf.math.log(min_reports))
+    # sigmoid for differentiability
     outcome_payments = tf.where(tf.greater(
         reports, min_reports), payments_repaid + payments_not_repaid, 0)
-
     coalition_outcome_payments = outcome_payments[:N_COALITION, :]
     return -1 * tf.math.reduce_sum(coalition_outcome_payments)
 
@@ -155,7 +154,7 @@ def profit_reports() -> None:
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
     plt.ylabel('Model loss')
-    plt.xlabel('Epoch')
+    plt.xlabel('Epochs')
     plt.legend(['Training', 'Validation'], loc='upper left')
     # plt.show()
 
@@ -199,10 +198,9 @@ def desire_borrowers() -> None:
 
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
-    plt.title('model loss')
-    plt.ylabel('loss')
-    plt.xlabel('epoch')
-    plt.legend(['train', 'val'], loc='upper left')
+    plt.ylabel('Model loss')
+    plt.xlabel('Epochs')
+    plt.legend(['Training', 'Validation'], loc='upper left')
     # plt.show()
 
     # iterate over borrowers that recommenders care about
@@ -235,7 +233,7 @@ def desire_borrowers_and_profit(alpha=0.5, testname=None):
     # y is the binary outcome of repayment (if allocated to that borrower)
     # we sample y according to the true probabilities so the probability is in the training
     # data, rather than the loss function (calling a random function is not differentiable)
-    y = np.random.binomial(1, PROBS, (N_TEST_CASES, M))
+    y = np.random.binomial(1, PROBS, (N_TEST_CASES, M)).astype(np.float32)
 
     inputs = Input(shape=(N_COALITION, M), dtype=tf.float32)
     layer = Flatten()(inputs)
@@ -258,10 +256,9 @@ def desire_borrowers_and_profit(alpha=0.5, testname=None):
 
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
-    plt.title('model loss')
-    plt.ylabel('loss')
-    plt.xlabel('epoch')
-    plt.legend(['train', 'val'], loc='upper left')
+    plt.ylabel('Model loss')
+    plt.xlabel('Epochs')
+    plt.legend(['Training', 'Validation'], loc='upper left')
     plt.savefig(f'results/{testname}_alpha_{np.round(alpha, 2)}.png',
                 bbox_inches='tight')
     plt.close()
@@ -408,10 +405,11 @@ def save_fig(filename, title, xlabel, ylabel, x, y, err=None):
 
 
 def main() -> None:
-    # profit_reports()
+    profit_reports()
     desire_borrowers()
+    desire_borrowers_and_profit(0.8)
     desire_borrowers_and_profit(0.5)
-    # desire_borrowers_and_profit(0.3)
+    desire_borrowers_and_profit(0.3)
 
     # test_alpha()
     # test_coalition_size()
