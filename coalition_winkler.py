@@ -15,10 +15,8 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.python.framework.ops import disable_eager_execution
 from keras.utils.vis_utils import plot_model
 
-# other files
-# from sgdr import SGDR
+PRINT_COMMENTS = True
 
-# disable_eager_execution()
 
 THRESHOLD = 0.5
 N_COALITION = 3
@@ -31,7 +29,7 @@ assert len(PROBS) == M
 PROBS = tf.convert_to_tensor(PROBS)
 
 BATCH_SIZE = 32
-N_TEST_CASES = BATCH_SIZE * 64
+N_TEST_CASES = BATCH_SIZE * 128
 
 
 # UTIL FUNCTIONS
@@ -122,8 +120,6 @@ def mixed_loss(desirability_importance=0.5):
     return desirability_and_profit_loss
 
 
-# CONVOLUTIONAL NEURAL NETWORKS
-
 def profit_reports() -> None:
     # here we are just maximizing profit from the mechanism, resulting in accurate reports
     # X doesn't do anything, it's just stochastic noise for the network to run
@@ -149,7 +145,7 @@ def profit_reports() -> None:
     # plot_model(model, 'model.png', show_shapes=True)
 
     history = model.fit(X, y, validation_split=0.2,
-                        epochs=100, batch_size=BATCH_SIZE, verbose=0)
+                        epochs=30, batch_size=BATCH_SIZE, verbose=0)
 
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
@@ -194,7 +190,7 @@ def desire_borrowers() -> None:
     model.compile(loss=desirability_loss,
                   optimizer=Adam(amsgrad=True))
     history = model.fit(X, y, validation_split=0.2,
-                        epochs=50, batch_size=BATCH_SIZE, verbose=0)
+                        epochs=30, batch_size=BATCH_SIZE, verbose=0)
 
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
@@ -213,10 +209,11 @@ def desire_borrowers() -> None:
     predictions = model.predict(np.array(tests))
     predictions, _ = np.split(predictions, 2, axis=0)
     predictions = np.array([prediction[0] for prediction in predictions])
-    for prediction in predictions:
-        print('mean: ' + str(np.mean(prediction, axis=0)))
-        print('std: ' + str(np.std(prediction, axis=0)))
-        print('')
+    if PRINT_COMMENTS:
+        for prediction in predictions:
+            print('mean: ' + str(np.mean(prediction, axis=0)))
+            print('std: ' + str(np.std(prediction, axis=0)))
+            print('')
     return predictions
 
 
@@ -274,121 +271,170 @@ def desire_borrowers_and_profit(alpha=0.5, testname=None):
     predictions = model.predict(np.array(tests))
     predictions, _ = np.split(predictions, 2, axis=0)
     predictions = np.array([prediction[0] for prediction in predictions])
-    for prediction in predictions:
-        print('mean: ' + str(np.mean(prediction, axis=0)))
-        print('std: ' + str(np.std(prediction, axis=0)))
-        print('')
+    if PRINT_COMMENTS:
+        for prediction in predictions:
+            print('alpha: ' + str(alpha))
+            print(prediction)
+            print('mean: ' + str(np.mean(prediction, axis=0)))
+            print('std: ' + str(np.std(prediction, axis=0)))
+            print('')
     return predictions
 
 
 def test_alpha():
     predictions = []
-    errors = []  # difference between true probs and actual reports
-    errors_stdev = []
-    errors_collusive_report = []
-    errors_collusive_report_stdev = []
-    errors_non_collusive_report = []
-    errors_non_collusive_report_stdev = []
-    diff_in_collusive_report = []
-    diff_in_collusive_report_stdev = []
-    alphas = np.linspace(0, 0.999, num=11)
+    alphas = np.linspace(0, 1, num=11)
     for alpha in alphas:
         print(alpha)
         prediction = desire_borrowers_and_profit(alpha, 'test_alpha')
         predictions.append(prediction)
-        error = [pred - np.tile(np.reshape(PROBS, [1, M]),
-                                [N_COALITION, 1]) for pred in prediction]
-        errors.append(np.mean(error))
-        errors_stdev.append(np.std(error))
-        collusive_err = []
-        non_collusive_err = []
-        for i, err in enumerate(error):
-            collusive_err.append(err[:, i])
-            non_collusive_err.append(np.delete(err, i, 1))
-        errors_collusive_report.append(np.mean(collusive_err))
-        errors_collusive_report_stdev.append(np.std(collusive_err))
-        errors_non_collusive_report.append(np.mean(non_collusive_err))
-        errors_non_collusive_report_stdev.append(np.std(non_collusive_err))
-        collusive_err_mn = np.array([np.mean(x) for x in collusive_err])
-        non_collusive_err_mn = np.array(
-            [np.mean(x) for x in non_collusive_err])
-        diff_in_collusive_report.append(
-            np.mean(collusive_err_mn - non_collusive_err_mn))
-        diff_in_collusive_report_stdev.append(
-            np.std(collusive_err_mn - non_collusive_err_mn))
-
     predictions = np.array(predictions)
     with open('results/nn_alpha_predictions.npy', 'wb') as f:
         np.save(f, predictions)
 
-    save_fig('results/collusion_alpha.png', 'Average Deviation from True Reports',
-             'alpha', 'Average deviation', alphas, errors, errors_stdev)
 
-    save_fig('results/collusion_desired_alpha.png', 'Average Deviation from True Reports on Desired Borrowers',
-             'alpha', 'Average deviation', alphas, errors_collusive_report, errors_collusive_report_stdev)
+def test_alpha_post_process_aggregate():
+    alphas = np.linspace(0, 1, num=11)
+    with open('saved_results/nn_alpha_predictions.npy', 'rb') as f:
+        predictions = np.load(f)
+        deviations = []  # difference between true probs and actual reports
+        deviations_stdev = []
+        deviations_collusive_report = []
+        deviations_collusive_report_stdev = []
+        deviations_non_collusive_report = []
+        deviations_non_collusive_report_stdev = []
+        diff_in_collusive_report = []
+        diff_in_collusive_report_stdev = []
+        for prediction in predictions:
+            dev = [pred - np.tile(np.reshape(PROBS, [1, M]),
+                                  [N_COALITION, 1]) for pred in prediction]
+            deviations.append(np.mean(dev))
+            deviations_stdev.append(np.std(dev))
+            collusive_dev = []
+            non_collusive_dev = []
+            for i, dev in enumerate(dev):
+                collusive_dev.append(dev[:, i])
+                non_collusive_dev.append(np.delete(dev, i, 1))
+            deviations_collusive_report.append(np.mean(collusive_dev))
+            deviations_collusive_report_stdev.append(np.std(collusive_dev))
+            deviations_non_collusive_report.append(np.mean(non_collusive_dev))
+            deviations_non_collusive_report_stdev.append(
+                np.std(non_collusive_dev))
+            collusive_dev_mn = np.array([np.mean(x) for x in collusive_dev])
+            non_collusive_dev_mn = np.array(
+                [np.mean(x) for x in non_collusive_dev])
+            diff_in_collusive_report.append(
+                np.mean(collusive_dev_mn - non_collusive_dev_mn))
+            diff_in_collusive_report_stdev.append(
+                np.std(collusive_dev_mn - non_collusive_dev_mn))
 
-    save_fig('results/collusion_non_desired_alpha.png', 'Average Deviation from True Reports on Non-Desired Borrowers',
-             'alpha', 'Average deviation', alphas, errors_non_collusive_report, errors_non_collusive_report_stdev)
+        save_fig('results/collusion_alpha.png', 'Average Deviation from True Reports',
+                 'alpha', 'Average deviation', alphas, deviations, deviations_stdev)
 
-    save_fig('results/collusion_difference_alpha.png', 'Average Difference in Deviation from True Reports between Desired and Non-Desired Borrowers',
-             'alpha', 'Average deviation', alphas, diff_in_collusive_report, diff_in_collusive_report_stdev)
+        save_fig('results/collusion_desired_alpha.png', 'Average Deviation from True Reports on Desired Borrowers',
+                 'alpha', 'Average deviation', alphas, deviations_collusive_report, deviations_collusive_report_stdev)
+
+        save_fig('results/collusion_non_desired_alpha.png', 'Average Deviation from True Reports on Non-Desired Borrowers',
+                 'alpha', 'Average deviation', alphas, deviations_non_collusive_report, deviations_non_collusive_report_stdev)
+
+        save_fig('results/collusion_difference_alpha.png', 'Average Difference in Deviation from True Reports between Desired and Non-Desired Borrowers',
+                 'alpha', 'Average deviation', alphas, diff_in_collusive_report, diff_in_collusive_report_stdev)
+
+
+def test_alpha_post_process_per_borrower():
+    alphas = np.linspace(0, 1, num=11)
+    with open('saved_results/nn_alpha_predictions.npy', 'rb') as f:
+        predictions = np.load(f)
+        deviations = []  # difference between true probs and actual reports
+        deviations_stdev = []
+        deviations_collusive_report = []
+        deviations_non_collusive_report = []
+        diff_in_collusive_report = []
+        for prediction in predictions:
+            dev = [pred - np.tile(np.reshape(PROBS, [1, M]),
+                                  [N_COALITION, 1]) for pred in prediction]
+            deviations.append([np.mean(x) for x in dev])
+            deviations_stdev.append([np.std(x) for x in dev])
+            collusive_dev = []
+            non_collusive_dev = []
+            for i, dev in enumerate(dev):
+                collusive_dev.append(dev[:, i])
+                non_collusive_dev.append(np.delete(dev, i, 1))
+            deviations_collusive_report.append(
+                [np.mean(x) for x in collusive_dev])
+            deviations_non_collusive_report.append(
+                [np.mean(x) for x in non_collusive_dev])
+            diff_in_collusive_report.append(
+                [np.mean(x) - np.mean(y) for x, y in zip(collusive_dev, non_collusive_dev)])
+
+        save_fig_multiy('results/collusion_alpha_borrower.png', 'Average Deviation from True Reports',
+                        'alpha', 'Average deviation', alphas, deviations)
+
+        save_fig_multiy('results/collusion_desired_alpha_borrower.png', 'Average Deviation from True Reports on Desired Borrowers',
+                        'alpha', 'Average deviation', alphas, deviations_collusive_report)
+
+        save_fig_multiy('results/collusion_non_desired_alpha_borrower.png', 'Average Deviation from True Reports on Non-Desired Borrowers',
+                        'alpha', 'Average deviation', alphas, deviations_non_collusive_report)
+
+        save_fig_multiy('results/collusion_difference_alpha_borrower.png', 'Average Difference in Deviation from True Reports between Desired and Non-Desired Borrowers',
+                        'alpha', 'Average deviation', alphas, diff_in_collusive_report)
 
 
 def test_coalition_size():
     global N_COALITION
-    predictions = []
-    errors = []  # difference between true probs and actual reports
-    errors_stdev = []
-    errors_collusive_report = []
-    errors_collusive_report_stdev = []
-    errors_non_collusive_report = []
-    errors_non_collusive_report_stdev = []
-    diff_in_collusive_report = []
-    diff_in_collusive_report_stdev = []
     coalition_sizes = np.array([x + 1 for x in range(N_TOTAL)])
+    predictions = []
     for size in coalition_sizes:
         print(size)
         N_COALITION = size
-        prediction = desire_borrowers_and_profit(0.3, 'test_coalition_size')
+        prediction = desire_borrowers_and_profit(0.4, 'test_coalition_size')
         predictions.append(prediction)
-        error = [pred - np.tile(np.reshape(PROBS, [1, M]),
-                                [N_COALITION, 1]) for pred in prediction]
-        errors.append(np.mean(error))
-        errors_stdev.append(np.std(error))
-        collusive_err = []
-        non_collusive_err = []
-        for i, err in enumerate(error):
-            collusive_err.append(err[:, i])
-            non_collusive_err.append(np.delete(err, i, 1))
-        errors_collusive_report.append(np.mean(collusive_err))
-        errors_collusive_report_stdev.append(np.std(collusive_err))
-        errors_non_collusive_report.append(np.mean(non_collusive_err))
-        errors_non_collusive_report_stdev.append(np.std(non_collusive_err))
-        collusive_err_mn = np.array([np.mean(x) for x in collusive_err])
-        non_collusive_err_mn = np.array(
-            [np.mean(x) for x in non_collusive_err])
-        diff_in_collusive_report.append(
-            np.mean(collusive_err_mn - non_collusive_err_mn))
-        diff_in_collusive_report_stdev.append(
-            np.std(collusive_err_mn - non_collusive_err_mn))
-
-    predictions = np.array(predictions, dtype=object)
-    with open('results/nn_size_predictions.npy', 'wb') as f:
-        np.save(f, predictions)
-
-    save_fig('results/collusion_size.png', 'Average Deviation from True Reports',
-             'Coalition size', 'Average deviation', coalition_sizes, errors, errors_stdev)
-
-    save_fig('results/collusion_desired_size.png', 'Average Deviation from True Reports on Desired Borrowers',
-             'Coalition size', 'Average deviation', coalition_sizes, errors_collusive_report, errors_collusive_report_stdev)
-
-    save_fig('results/collusion_non_desired_size.png', 'Average Deviation from True Reports on Non-Desired Borrowers',
-             'Coalition size', 'Average deviation', coalition_sizes, errors_non_collusive_report, errors_non_collusive_report_stdev)
-
-    save_fig('results/collusion_difference_size.png', 'Average Difference in Deviation from True Reports between Desired and Non-Desired Borrowers',
-             'Coalition size', 'Average deviation', coalition_sizes, diff_in_collusive_report, diff_in_collusive_report_stdev)
-
     N_COALITION = 3
+    print(predictions)
+    with open('results/nn_size_predictions.npz', 'wb') as f:
+        # unpack predictions
+        np.savez(f, *predictions)
+
+
+def test_coalition_size_post_process():
+    coalition_sizes = np.array([x + 1 for x in range(N_TOTAL)])
+    with open('results/nn_size_predictions.npz', 'rb') as f:
+        npzfile = np.load(f)
+        predictions = []
+        for file in npzfile.files:
+            predictions.append(npzfile[file])
+        deviations = []  # difference between true probs and actual reports
+        deviations_collusive_report = []
+        deviations_non_collusive_report = []
+        diff_in_collusive_report = []
+        for i, prediction in enumerate(predictions):
+            dev = [pred - np.tile(np.reshape(PROBS, [1, M]),
+                                  [i+1, 1]) for pred in prediction]
+            # coalition size is i+1
+            deviations.append([np.mean(x) for x in dev])
+            collusive_dev = []
+            non_collusive_dev = []
+            for i, dev in enumerate(dev):
+                collusive_dev.append(dev[:, i])
+                non_collusive_dev.append(np.delete(dev, i, 1))
+            deviations_collusive_report.append(
+                [np.mean(x) for x in collusive_dev])
+            deviations_non_collusive_report.append(
+                [np.mean(x) for x in non_collusive_dev])
+            diff_in_collusive_report.append(
+                [np.mean(x) - np.mean(y) for x, y in zip(collusive_dev, non_collusive_dev)])
+
+        save_fig_multiy('results/collusion_size.png', 'Average Deviation from True Reports',
+                        'Coalition size', 'Average deviation', coalition_sizes, deviations)
+
+        save_fig_multiy('results/collusion_desired_size.png', 'Average Deviation from True Reports on Desired Borrowers',
+                        'Coalition size', 'Average deviation', coalition_sizes, deviations_collusive_report)
+
+        save_fig_multiy('results/collusion_non_desired_size.png', 'Average Deviation from True Reports on Non-Desired Borrowers',
+                        'Coalition size', 'Average deviation', coalition_sizes, deviations_non_collusive_report)
+
+        save_fig_multiy('results/collusion_difference_size.png', 'Average Difference in Deviation from True Reports between Desired and Non-Desired Borrowers',
+                        'Coalition size', 'Average deviation', coalition_sizes, diff_in_collusive_report)
 
 
 def save_fig(filename, title, xlabel, ylabel, x, y, err=None):
@@ -397,22 +443,46 @@ def save_fig(filename, title, xlabel, ylabel, x, y, err=None):
                      elinewidth=0.5, capsize=3, capthick=0.5)
     else:
         plt.plot(x, y)
-    # plt.title(title)
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
     plt.savefig(filename, bbox_inches='tight')
     plt.close()
 
 
+def save_fig_multiy(filename, title, xlabel, ylabel, x, y, err=None, serieslabels=[i+1 for i in range(M)], legendtitle="Preferred borrower"):
+    x = np.array(x)
+    y = np.hsplit(np.array(y), M)
+    if err:
+        err = np.hsplit(np.array(err), M)
+        for yseries, errseries in zip(y, err):
+            plt.errorbar(x, yseries.ravel(), errseries.ravel(), ecolor='black',
+                         elinewidth=0.5, capsize=3, capthick=0.5)
+    else:
+        for yseries in y:
+            plt.plot(x, yseries.ravel())
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.legend(serieslabels, title=legendtitle, loc='upper left')
+    plt.savefig(filename, bbox_inches='tight')
+    plt.close()
+
+
 def main() -> None:
-    profit_reports()
-    desire_borrowers()
-    desire_borrowers_and_profit(0.8)
-    desire_borrowers_and_profit(0.5)
-    desire_borrowers_and_profit(0.3)
+    global PRINT_COMMENTS
+    PRINT_COMMENTS = True
+    # profit_reports()
+    # desire_borrowers()
+    # desire_borrowers_and_profit(0.8)
+    # desire_borrowers_and_profit(0.7)
+    # desire_borrowers_and_profit(0.5)
+    # desire_borrowers_and_profit(0.3)
 
     # test_alpha()
-    # test_coalition_size()
+    # test_alpha_post_process_aggregate()
+    # test_alpha_post_process_per_borrower()
+
+    test_coalition_size()
+    test_coalition_size_post_process()
 
 
 if __name__ == '__main__':
