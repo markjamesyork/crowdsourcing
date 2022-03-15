@@ -4,6 +4,7 @@
 import itertools
 import matplotlib.pyplot as plt
 import numpy as np
+import random
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import train_test_split
 from sklearn.calibration import calibration_curve
@@ -13,29 +14,36 @@ from tensorflow.keras.backend import stack
 from tensorflow.keras.layers import Dense, Concatenate, Conv2D, Flatten, Reshape
 from tensorflow.keras.optimizers import Adam
 from tensorflow.python.framework.ops import disable_eager_execution
+from keras.models import load_model
 from keras.utils.vis_utils import plot_model
 
 PRINT_COMMENTS = True
+SHOW_PLOTS = True
 
+# neural network params
+DEFAULT_LR = 0.0015
+DEFAULT_B1 = 0.992
+DEFAULT_EPSILON = 1e-8
 
+# model params
 THRESHOLD = 0.5
-N_COALITION = 3
+N_COALITION = 2
 N_TOTAL = 6
 M = 4
 EPSILON = 0.001
 
-PROBS = [0.43, 0.62, 0.70, 0.76]
+PROBS = [0.34, 0.41, 0.67, 0.81]
 assert len(PROBS) == M
 PROBS = tf.convert_to_tensor(PROBS)
 
 BATCH_SIZE = 32
-N_TEST_CASES = BATCH_SIZE * 128
+N_TEST_CASES = BATCH_SIZE * 64
 
 
 # UTIL FUNCTIONS
 
-def sigmoid(x, threshold, steepness=70):
-    return tf.math.exp(steepness*(x-threshold)) / (1 + tf.math.exp(steepness*(x-threshold)))
+def sigmoid(x, threshold, steepness=1):
+    return 1 / (1 + tf.math.exp(steepness*(threshold-x)))
 
 
 def all_binary_strings(n):
@@ -54,8 +62,13 @@ def calculate_loss_in_profit(outcomes, reports):
     reports = tf.clip_by_value(reports, EPSILON, 1 - EPSILON)
     weights = tf.fill([N_TOTAL], 1/N_TOTAL)
     beliefs = tf.linalg.matvec(reports, weights, transpose_a=True)
-    allocation = tf.greater(beliefs, THRESHOLD)
-    outcomes = tf.cast(tf.where(allocation, outcomes, 0), dtype=tf.float32)
+    allocation = tf.cast(tf.greater(beliefs, THRESHOLD), tf.float32)
+    # outcomes = outcomes * allocation
+    # allocation = tf.math.round(sigmoid(beliefs, THRESHOLD))
+    # outcomes = allocation * outcomes
+
+    outcomes = allocation * PROBS
+
     min_reports = (THRESHOLD - (tf.tile(tf.reshape(beliefs, [1, M]), [N_TOTAL, 1]) - (reports *
                    tf.tile(tf.reshape(weights, [N_TOTAL, 1]), [1, M])))) * tf.tile(1 / tf.reshape(weights, [N_TOTAL, 1]), [1, M])
     min_reports = tf.clip_by_value(min_reports, EPSILON, 1 - EPSILON)
@@ -66,8 +79,10 @@ def calculate_loss_in_profit(outcomes, reports):
     payments_not_repaid = (1 - outcomes) * (tf.math.log(1 - reports) -
                                             tf.math.log(1 - min_reports)) / (-1 * tf.math.log(min_reports))
     # sigmoid for differentiability
-    outcome_payments = tf.where(tf.greater(
-        reports, min_reports), payments_repaid + payments_not_repaid, 0)
+    outcome_payments = (payments_repaid + payments_not_repaid) * tf.cast(tf.greater(
+        reports, min_reports), tf.float32)
+    # outcome_payments = (payments_repaid + payments_not_repaid) * \
+    #     tf.math.round(sigmoid(reports, min_reports))
     coalition_outcome_payments = outcome_payments[:N_COALITION, :]
     return -1 * tf.math.reduce_sum(coalition_outcome_payments)
 
@@ -92,10 +107,10 @@ def calculate_loss_in_desired_borrowers(reports, preferences):
     weights = tf.fill([N_TOTAL], 1/N_TOTAL)
     beliefs = tf.linalg.matvec(reports, weights, transpose_a=True)
     # sigmoid instead of step function for differentiability
-    allocation = sigmoid(beliefs, THRESHOLD, 5)
     # allocation = tf.cast(tf.greater(beliefs, THRESHOLD), dtype=tf.float32)
-    desirability_utilities = preferences * \
-        tf.tile(tf.reshape(allocation, [1, M]), [N_COALITION, 1])
+    allocation = sigmoid(beliefs, THRESHOLD, 250)
+    desirability_utilities = allocation * \
+        tf.math.reduce_sum(preferences, axis=0)
     return -1 * tf.math.reduce_sum(desirability_utilities)
 
 
@@ -120,6 +135,21 @@ def mixed_loss(desirability_importance=0.5):
     return desirability_and_profit_loss
 
 
+def mixed_loss_minimax(desirability_importance=0.5):
+
+    def desirability_and_profit_loss_minimax(y_true, y_pred):
+        reports, preferences = tf.split(y_pred, 2, axis=0)
+        desirability_loss_vals = tf.map_fn(lambda x: calculate_loss_in_desired_borrowers(
+            x[0], x[1]), (reports, preferences), fn_output_signature=tf.float32)
+        profit_loss_vals = tf.map_fn(lambda x: calculate_loss_in_profit(
+            x[0], x[1]), (y_true, reports), fn_output_signature=tf.float32)
+        # need to remove preferences for profit calc
+        return tf.math.reduce_max(desirability_importance * desirability_loss_vals +
+                                  (1-desirability_importance) * profit_loss_vals)
+
+    return desirability_and_profit_loss_minimax
+
+
 def profit_reports() -> None:
     # here we are just maximizing profit from the mechanism, resulting in accurate reports
     # X doesn't do anything, it's just stochastic noise for the network to run
@@ -140,19 +170,20 @@ def profit_reports() -> None:
     model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
 
     model.compile(loss=profit_loss,
-                  optimizer=Adam(amsgrad=True))
+                  optimizer=Adam(learning_rate=DEFAULT_LR, beta_1=DEFAULT_B1, epsilon=DEFAULT_EPSILON, amsgrad=True))
 
     # plot_model(model, 'model.png', show_shapes=True)
 
     history = model.fit(X, y, validation_split=0.2,
-                        epochs=30, batch_size=BATCH_SIZE, verbose=0)
+                        epochs=20, batch_size=BATCH_SIZE, verbose=0)
 
-    plt.plot(history.history['loss'])
-    plt.plot(history.history['val_loss'])
-    plt.ylabel('Model loss')
-    plt.xlabel('Epochs')
-    plt.legend(['Training', 'Validation'], loc='upper left')
-    # plt.show()
+    if SHOW_PLOTS:
+        plt.plot(history.history['loss'])
+        plt.plot(history.history['val_loss'])
+        plt.ylabel('Model loss')
+        plt.xlabel('Epochs')
+        plt.legend(['Training', 'Validation'], loc='upper left')
+        plt.show()
 
     predictions = model.predict(np.full((1, N_COALITION, M), 0.5))[0]
     print('mean: ' + str(np.mean(predictions, axis=0)))
@@ -188,16 +219,17 @@ def desire_borrowers() -> None:
     model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
 
     model.compile(loss=desirability_loss,
-                  optimizer=Adam(amsgrad=True))
+                  optimizer=Adam(learning_rate=DEFAULT_LR, beta_1=DEFAULT_B1, epsilon=DEFAULT_EPSILON, amsgrad=True))
     history = model.fit(X, y, validation_split=0.2,
-                        epochs=30, batch_size=BATCH_SIZE, verbose=0)
+                        epochs=20, batch_size=BATCH_SIZE, verbose=0)
 
-    plt.plot(history.history['loss'])
-    plt.plot(history.history['val_loss'])
-    plt.ylabel('Model loss')
-    plt.xlabel('Epochs')
-    plt.legend(['Training', 'Validation'], loc='upper left')
-    # plt.show()
+    if SHOW_PLOTS:
+        plt.plot(history.history['loss'])
+        plt.plot(history.history['val_loss'])
+        plt.ylabel('Model loss')
+        plt.xlabel('Epochs')
+        plt.legend(['Training', 'Validation'], loc='upper left')
+        plt.show()
 
     # iterate over borrowers that recommenders care about
     tests = []
@@ -217,7 +249,7 @@ def desire_borrowers() -> None:
     return predictions
 
 
-def desire_borrowers_and_profit(alpha=0.5, testname=None):
+def desire_borrowers_and_profit(alpha=0.5, testname=None, nruns=5):
     # in this case recommenders care about both profits and helping their desired borrower get a loan
 
     # here, x_{i,q} represents how much that recommender i wants q to get a loan.
@@ -226,6 +258,82 @@ def desire_borrowers_and_profit(alpha=0.5, testname=None):
                   for _, index in enumerate(indices)])
 
     # X = np.random.randint(0, 2, (N_TEST_CASES, N_COALITION * M))
+
+    # y is the binary outcome of repayment (if allocated to that borrower)
+    # we sample y according to the true probabilities so the probability is in the training
+    # data, rather than the loss function (calling a random function is not differentiable)
+    y = np.random.binomial(1, PROBS, (N_TEST_CASES, M)).astype(np.float32)
+
+    # pick best of nruns stochastic runs
+    best_model_loss = float('inf')
+    best_model = None
+    best_history = None
+    for _ in range(nruns):
+        inputs = Input(shape=(N_COALITION, M), dtype=tf.float32)
+        layer = Flatten()(inputs)
+        layer = Dense(N_COALITION * M)(layer)
+        layer = Dense(N_COALITION * M)(layer)
+        layer = Dense(N_COALITION * M, activation='sigmoid')(layer)
+        # we have to concatenate the input biases in the final layer so they can appear in the loss function
+        # but the input biases never actually change
+        outputs = Concatenate(axis=0)([Reshape((1, N_COALITION, M))(layer),
+                                       Reshape((1, N_COALITION, M))(inputs)])
+
+        model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
+
+        # the mixed loss coefficient is what percent the recommenders care about their desired borrower
+        # as compared to profit
+        model.compile(loss=mixed_loss(alpha),
+                      optimizer=Adam(learning_rate=DEFAULT_LR, beta_1=DEFAULT_B1, epsilon=DEFAULT_EPSILON, amsgrad=True))
+        history = model.fit(X, y, validation_split=0.2,
+                            epochs=20, batch_size=BATCH_SIZE, verbose=0)
+
+        model_loss = history.history['val_loss'][-1]
+        if model_loss < best_model_loss:
+            best_model_loss = model_loss
+            best_model = model
+            best_history = history
+
+    plt.plot(best_history.history['loss'])
+    plt.plot(best_history.history['val_loss'])
+    plt.ylabel('Model loss')
+    plt.xlabel('Epochs')
+    plt.legend(['Training', 'Validation'], loc='upper left')
+    plt.savefig(f'results/{testname}_alpha_{np.round(alpha, 2)}.png',
+                bbox_inches='tight')
+    if SHOW_PLOTS:
+        plt.show()
+    plt.close()
+
+    # iterate over borrowers that recommenders care about
+    tests = []
+    for index in range(M):
+        test = np.zeros((1, M))
+        test[0, index] = 1
+        test = np.tile(test, [N_COALITION, 1])
+        tests.append(test)
+    predictions = best_model.predict(np.array(tests))
+    predictions, _ = np.split(predictions, 2, axis=0)
+    predictions = np.array([prediction[0] for prediction in predictions])
+    if PRINT_COMMENTS:
+        for prediction in predictions:
+            print('alpha: ' + str(alpha))
+            print(prediction)
+            print('mean: ' + str(np.mean(prediction, axis=0)))
+            print('std: ' + str(np.std(prediction, axis=0)))
+            print('')
+    return predictions
+
+
+def desire_borrowers_and_profit_save_model(alpha=0.8, testname='savemodel'):
+    # in this case recommenders care about both profits and helping their desired borrower get a loan
+
+    # here, x_{i,q} represents how much that recommender i wants q to get a loan.
+    # indices = np.random.randint(0, M, N_TEST_CASES)
+    # X = np.array([np.tile(np.reshape([float(j == index) for j in range(M)], (1, M)), (N_COALITION, 1))
+    #               for _, index in enumerate(indices)])
+
+    X = np.random.randint(0, 2, (N_TEST_CASES, N_COALITION, M))
 
     # y is the binary outcome of repayment (if allocated to that borrower)
     # we sample y according to the true probabilities so the probability is in the training
@@ -247,9 +355,70 @@ def desire_borrowers_and_profit(alpha=0.5, testname=None):
     # the mixed loss coefficient is what percent the recommenders care about their desired borrower
     # as compared to profit
     model.compile(loss=mixed_loss(alpha),
-                  optimizer=Adam(amsgrad=True))
+                  optimizer=Adam(learning_rate=DEFAULT_LR, beta_1=DEFAULT_B1, epsilon=DEFAULT_EPSILON, amsgrad=True))
     history = model.fit(X, y, validation_split=0.2,
-                        epochs=50, batch_size=BATCH_SIZE, verbose=0)
+                        epochs=20, batch_size=BATCH_SIZE, verbose=0)
+
+    model.save('coalition_alpha_08')
+
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.ylabel('Model loss')
+    plt.xlabel('Epochs')
+    plt.legend(['Training', 'Validation'], loc='upper left')
+    plt.savefig(f'results/{testname}_alpha_{np.round(alpha, 2)}.png',
+                bbox_inches='tight')
+    if SHOW_PLOTS:
+        plt.show()
+    plt.close()
+
+
+def desire_borrowers_and_profit_disagreement(alpha=0.8, testname='disagreement'):
+    # in this case recommenders care about both profits and helping their desired borrower get a loan
+
+    # here, x_{i,q} represents how much that recommender i wants q to get a loan.
+    # indices = np.random.randint(0, M, N_TEST_CASES)
+    # X = np.array([np.tile(np.reshape([float(j == index) for j in range(M)], (1, M)), (N_COALITION, 1))
+    #               for _, index in enumerate(indices)])
+
+    X = []
+    for _ in range(N_TEST_CASES):
+        xi = np.zeros((N_COALITION, M))
+        rand_indices = get_indices(
+            N_COALITION, random.randint(0, N_COALITION))
+        for i in range(N_COALITION):
+            if i in rand_indices:
+                xi[i, 0] = 1
+            else:
+                xi[i, 1] = 1
+        X.append(xi)
+    X = np.array(X)
+
+    # y is the binary outcome of repayment (if allocated to that borrower)
+    # we sample y according to the true probabilities so the probability is in the training
+    # data, rather than the loss function (calling a random function is not differentiable)
+    y = np.random.binomial(1, PROBS, (N_TEST_CASES, M)).astype(np.float32)
+
+    inputs = Input(shape=(N_COALITION, M), dtype=tf.float32)
+    layer = Flatten()(inputs)
+    layer = Dense(N_COALITION * M)(layer)
+    layer = Dense(N_COALITION * M)(layer)
+    layer = Dense(N_COALITION * M, activation='sigmoid')(layer)
+    # we have to concatenate the input biases in the final layer so they can appear in the loss function
+    # but the input biases never actually change
+    outputs = Concatenate(axis=0)([Reshape((1, N_COALITION, M))(layer),
+                                   Reshape((1, N_COALITION, M))(inputs)])
+
+    model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
+
+    # the mixed loss coefficient is what percent the recommenders care about their desired borrower
+    # as compared to profit
+    model.compile(loss=mixed_loss(alpha),
+                  optimizer=Adam(learning_rate=DEFAULT_LR, beta_1=DEFAULT_B1, epsilon=DEFAULT_EPSILON, amsgrad=True))
+    history = model.fit(X, y, validation_split=0.2,
+                        epochs=20, batch_size=BATCH_SIZE, verbose=0)
+
+    model.save('coalition_disagreement')
 
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
@@ -261,29 +430,116 @@ def desire_borrowers_and_profit(alpha=0.5, testname=None):
     plt.close()
     # plt.show()
 
-    # iterate over borrowers that recommenders care about
+
+def desire_borrowers_and_profit_disagreement_minimax(alpha=0.8, testname='disagreement_minimax'):
+    # in this case recommenders care about both profits and helping their desired borrower get a loan
+
+    # here, x_{i,q} represents how much that recommender i wants q to get a loan.
+    # indices = np.random.randint(0, M, N_TEST_CASES)
+    # X = np.array([np.tile(np.reshape([float(j == index) for j in range(M)], (1, M)), (N_COALITION, 1))
+    #               for _, index in enumerate(indices)])
+
+    X = []
+    for _ in range(N_TEST_CASES):
+        xi = np.zeros((N_COALITION, M))
+        rand_indices = get_indices(
+            N_COALITION, random.randint(0, N_COALITION))
+        for i in range(N_COALITION):
+            if i in rand_indices:
+                xi[i, 0] = 1
+            else:
+                xi[i, 1] = 1
+        X.append(xi)
+    X = np.array(X)
+
+    # y is the binary outcome of repayment (if allocated to that borrower)
+    # we sample y according to the true probabilities so the probability is in the training
+    # data, rather than the loss function (calling a random function is not differentiable)
+    y = np.random.binomial(1, PROBS, (N_TEST_CASES, M)).astype(np.float32)
+
+    inputs = Input(shape=(N_COALITION, M), dtype=tf.float32)
+    layer = Flatten()(inputs)
+    layer = Dense(N_COALITION * M)(layer)
+    layer = Dense(N_COALITION * M)(layer)
+    layer = Dense(N_COALITION * M, activation='sigmoid')(layer)
+    # we have to concatenate the input biases in the final layer so they can appear in the loss function
+    # but the input biases never actually change
+    outputs = Concatenate(axis=0)([Reshape((1, N_COALITION, M))(layer),
+                                   Reshape((1, N_COALITION, M))(inputs)])
+
+    model = Model(inputs=inputs, outputs=outputs, name="collusion_model")
+
+    # the mixed loss coefficient is what percent the recommenders care about their desired borrower
+    # as compared to profit
+    model.compile(loss=mixed_loss_minimax(alpha),
+                  optimizer=Adam(learning_rate=DEFAULT_LR, beta_1=DEFAULT_B1, epsilon=DEFAULT_EPSILON, amsgrad=True))
+    history = model.fit(X, y, validation_split=0.2,
+                        epochs=20, batch_size=BATCH_SIZE, verbose=0)
+
+    model.save('coalition_disagreement_minimax')
+
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.ylabel('Model loss')
+    plt.xlabel('Epochs')
+    plt.legend(['Training', 'Validation'], loc='upper left')
+    plt.savefig(f'results/{testname}_alpha_{np.round(alpha, 2)}.png',
+                bbox_inches='tight')
+    plt.close()
+    # plt.show()
+
+
+def test_disagreement():
+    model = load_model('coalition_disagreement', custom_objects={
+                       'desirability_and_profit_loss': mixed_loss(0.8)})
     tests = []
-    for index in range(M):
-        test = np.zeros((1, M))
-        test[0, index] = 1
-        test = np.tile(test, [N_COALITION, 1])
-        tests.append(test)
+
+    test = np.zeros((N_COALITION, M))
+    for i in range(N_COALITION):
+        if i < 2:
+            test[i, 0] = 1
+        else:
+            test[i, 1] = 1
+    tests.append(test)
+
     predictions = model.predict(np.array(tests))
     predictions, _ = np.split(predictions, 2, axis=0)
     predictions = np.array([prediction[0] for prediction in predictions])
     if PRINT_COMMENTS:
         for prediction in predictions:
-            print('alpha: ' + str(alpha))
             print(prediction)
             print('mean: ' + str(np.mean(prediction, axis=0)))
             print('std: ' + str(np.std(prediction, axis=0)))
             print('')
-    return predictions
+
+
+def test_disagreement_minimax():
+    model = load_model('coalition_disagreement_minimax', custom_objects={
+                       'desirability_and_profit_loss_minimax': mixed_loss_minimax(0.8)})
+    tests = []
+
+    test = np.zeros((N_COALITION, M))
+    for i in range(N_COALITION):
+        if i < 2:
+            test[i, 0] = 1
+        else:
+            test[i, 1] = 1
+    tests.append(test)
+
+    predictions = model.predict(np.array(tests))
+    predictions, _ = np.split(predictions, 2, axis=0)
+    predictions = np.array([prediction[0] for prediction in predictions])
+    if PRINT_COMMENTS:
+        for prediction in predictions:
+            print(prediction)
+            print('mean: ' + str(np.mean(prediction, axis=0)))
+            print('std: ' + str(np.std(prediction, axis=0)))
+            print('')
 
 
 def test_alpha():
     predictions = []
-    alphas = np.linspace(0, 1, num=11)
+    alphas = np.linspace(0, 1, num=21)
     for alpha in alphas:
         print(alpha)
         prediction = desire_borrowers_and_profit(alpha, 'test_alpha')
@@ -294,8 +550,8 @@ def test_alpha():
 
 
 def test_alpha_post_process_aggregate():
-    alphas = np.linspace(0, 1, num=11)
-    with open('saved_results/nn_alpha_predictions.npy', 'rb') as f:
+    alphas = np.linspace(0, 1, num=21)
+    with open('results/nn_alpha_predictions.npy', 'rb') as f:
         predictions = np.load(f)
         deviations = []  # difference between true probs and actual reports
         deviations_stdev = []
@@ -342,8 +598,8 @@ def test_alpha_post_process_aggregate():
 
 
 def test_alpha_post_process_per_borrower():
-    alphas = np.linspace(0, 1, num=11)
-    with open('saved_results/nn_alpha_predictions.npy', 'rb') as f:
+    alphas = np.linspace(0, 1, num=21)
+    with open('results/nn_alpha_predictions.npy', 'rb') as f:
         predictions = np.load(f)
         deviations = []  # difference between true probs and actual reports
         deviations_stdev = []
@@ -382,14 +638,15 @@ def test_alpha_post_process_per_borrower():
 
 def test_coalition_size():
     global N_COALITION
+    save_n_coalition = N_COALITION
     coalition_sizes = np.array([x + 1 for x in range(N_TOTAL)])
     predictions = []
     for size in coalition_sizes:
         print(size)
         N_COALITION = size
-        prediction = desire_borrowers_and_profit(0.4, 'test_coalition_size')
+        prediction = desire_borrowers_and_profit(0.7, 'test_coalition_size')
         predictions.append(prediction)
-    N_COALITION = 3
+    N_COALITION = save_n_coalition
     print(predictions)
     with open('results/nn_size_predictions.npz', 'wb') as f:
         # unpack predictions
@@ -437,6 +694,26 @@ def test_coalition_size_post_process():
                         'Coalition size', 'Average deviation', coalition_sizes, diff_in_collusive_report)
 
 
+def test_effects():
+    model = load_model('coalition_alpha_08', custom_objects={
+                       'desirability_and_profit_loss': mixed_loss(0.8)})
+    tests = []
+    for index in range(M):
+        test = np.zeros((1, M))
+        test[0, index] = 1
+        test = np.tile(test, [N_COALITION, 1])
+        tests.append(test)
+    predictions = model.predict(np.array(tests))
+    predictions, _ = np.split(predictions, 2, axis=0)
+    predictions = np.array([prediction[0] for prediction in predictions])
+    if PRINT_COMMENTS:
+        for prediction in predictions:
+            print(prediction)
+            print('mean: ' + str(np.mean(prediction, axis=0)))
+            print('std: ' + str(np.std(prediction, axis=0)))
+            print('')
+
+
 def save_fig(filename, title, xlabel, ylabel, x, y, err=None):
     if err:
         plt.errorbar(x, y, err, ecolor='black',
@@ -467,19 +744,39 @@ def save_fig_multiy(filename, title, xlabel, ylabel, x, y, err=None, serieslabel
     plt.close()
 
 
-def main() -> None:
-    global PRINT_COMMENTS
-    PRINT_COMMENTS = True
-    # profit_reports()
-    # desire_borrowers()
-    # desire_borrowers_and_profit(0.8)
-    # desire_borrowers_and_profit(0.7)
-    # desire_borrowers_and_profit(0.5)
-    # desire_borrowers_and_profit(0.3)
+def get_indices(n, k):
+    assert k <= n
+    result = []
+    indices = [i for i in range(n)]
+    for _ in range(k):
+        selected = random.choice(indices)
+        indices.remove(selected)
+        result.append(selected)
+    return sorted(result)
 
-    # test_alpha()
-    # test_alpha_post_process_aggregate()
-    # test_alpha_post_process_per_borrower()
+
+def main() -> None:
+    global PRINT_COMMENTS, SHOW_PLOTS
+    PRINT_COMMENTS = True
+    SHOW_PLOTS = False
+    profit_reports()
+    desire_borrowers()
+    desire_borrowers_and_profit(0.8)
+    desire_borrowers_and_profit(0.7)
+    desire_borrowers_and_profit(0.5)
+    desire_borrowers_and_profit(0.3)
+
+    # desire_borrowers_and_profit_save_model()
+    # test_effects()
+
+    # desire_borrowers_and_profit_disagreement()
+    # desire_borrowers_and_profit_disagreement_minimax()
+    # test_disagreement()
+    # test_disagreement_minimax()
+
+    test_alpha()
+    test_alpha_post_process_aggregate()
+    test_alpha_post_process_per_borrower()
 
     test_coalition_size()
     test_coalition_size_post_process()

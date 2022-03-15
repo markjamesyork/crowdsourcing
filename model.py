@@ -146,7 +146,7 @@ class LendingModel:
 
     def _get_score_winkler(self, i: int, q: int) -> np.float64:
         '''util for _elicit_winkler()'''
-        # see vectorized implementation below
+        # no longer needed in vectorized implementation below
         report = self.reports[i, q]
         outcome = self.outcomes[q]
         min_report = np.clip(1/self.weights[i] * (self.threshold - (self._get_linear_aggregator(q) -
@@ -164,6 +164,7 @@ class LendingModel:
 
     def _get_linear_aggregator(self, q: int) -> np.float64:
         '''util for _get_score_winkler() and _elicit_winkler()'''
+        # no longer needed in vectorized implementation below
         return np.dot(self.weights, self.reports[:, q])
 
     def _elicit_winkler(self) -> None:

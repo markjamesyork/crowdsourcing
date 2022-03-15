@@ -2,8 +2,10 @@
 # please use Python >=3.9
 
 from enum import Enum, auto
-from keras.models import Sequential
-from keras.layers import Dense
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import Dense, Flatten
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.metrics import AUC
 import matplotlib.pyplot as plt
 import numpy as np
 import random
@@ -13,6 +15,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.calibration import calibration_curve
 from sklearn.preprocessing import MinMaxScaler
 from statistics import NormalDist
+
+from coalition_winkler import mixed_loss
 
 
 class ReportStrategy(Enum):
@@ -252,7 +256,7 @@ def test_creditworthiness() -> None:
     model.add(Dense(8, activation='relu'))
     model.add(Dense(1, activation='sigmoid'))
     model.compile(loss='binary_crossentropy',
-                  optimizer='adam',
+                  optimizer=Adam(amsgrad=True),
                   metrics=['accuracy'])
     history = model.fit(X, y, validation_split=0.2,
                         epochs=100, batch_size=10, verbose=0)
@@ -277,18 +281,75 @@ def test_creditworthiness() -> None:
     print(sum(y) / len(y))
 
 
-def test_calibration():
-    pass
+def test_learned_collusion():
+    model = load_model('coalition_alpha_08', custom_objects={
+                       'desirability_and_profit_loss': mixed_loss(0.8)})
+    N_TEST_CASES = 5000
+    N_COALITION = 3
+    N_TOTAL = 6
+    M = 4
+    PROBS = [0.43, 0.62, 0.70, 0.76]
+    tests = np.random.randint(0, 2, (N_TEST_CASES, N_COALITION, M))
+    predictions = model.predict(np.array(tests))
+    predictions, _ = np.split(predictions, 2, axis=0)
+    predictions = np.array([prediction[0] for prediction in predictions])
+
+    true_reports = np.array([np.clip(np.tile(np.reshape(PROBS, (1, M)), (N_TOTAL - N_COALITION, 1)) +
+                                     np.random.normal(0, 0.1, (N_TOTAL - N_COALITION, M)), 0, 1) for _ in range(N_TEST_CASES)])
+
+    X = []
+    y = []
+    for collusive_report, true_report in zip(predictions, true_reports):
+        rand_indices = get_indices(N_TOTAL, N_COALITION)
+        for report, i in zip(collusive_report, rand_indices):
+            true_report = np.insert(true_report, i, report, axis=0)
+        yi = [float(i in rand_indices) for i in range(N_TOTAL)]
+        X.append(np.reshape(true_report, N_TOTAL * M))
+        y.append(yi)
+    X = np.array(X)
+    y = np.array(y)
+
+    model = Sequential()
+    model.add(Dense(N_TOTAL * M, activation='relu', input_dim=N_TOTAL * M))
+    model.add(Dense(N_TOTAL * M/2, activation='relu'))
+    model.add(Dense(N_TOTAL, activation='sigmoid'))
+    model.compile(loss='binary_crossentropy',
+                  optimizer=Adam(amsgrad=True),
+                  metrics=[AUC()])
+    history = model.fit(X, y, validation_split=0.2,
+                        epochs=200, batch_size=32, verbose=0)
+    plt.plot(history.history['auc'])
+    plt.plot(history.history['val_auc'])
+    plt.ylabel('AUC')
+    plt.xlabel('Epoch')
+    plt.legend(['Training', 'Validation'], loc='upper left')
+    plt.show()
+
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.ylabel('Binary crossentropy loss')
+    plt.xlabel('Epoch')
+    plt.legend(['Training', 'Validation'], loc='upper left')
+    plt.show()
 
 
-def test_optimal_collusion():
-    pass
+def get_indices(n, k):
+    assert k < n
+    result = []
+    indices = [i for i in range(n)]
+    for _ in range(k):
+        selected = random.choice(indices)
+        indices.remove(selected)
+        result.append(selected)
+    return sorted(result)
 
 
 def main() -> None:
     # test_brier()
-    test_knowledge()
+    # test_knowledge()
     # test_creditworthiness()
+
+    test_learned_collusion()
 
 
 if __name__ == '__main__':
