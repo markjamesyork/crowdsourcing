@@ -734,7 +734,7 @@ def test_coalition_size():
     for size in coalition_sizes:
         print(size)
         N_COALITION = size
-        prediction = desire_borrowers_and_profit(0.7, 'test_coalition_size')
+        prediction = desire_borrowers_and_profit(0.5, 'test_coalition_size')
         predictions.append(prediction)
     N_COALITION = save_n_coalition
     print(predictions)
@@ -919,7 +919,7 @@ def main() -> None:
     # test_alpha()
     # test_alpha_post_process_aggregate()
     # test_alpha_post_process_per_borrower(
-    #     'results_multiple_trials_rand/nn_alpha_predictions.npy')
+    #     'results/nn_alpha_predictions.npy')
 
     test_coalition_size()
     test_coalition_size_post_process(
